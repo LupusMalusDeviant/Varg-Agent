@@ -1,0 +1,361 @@
+/// Core Chat Agent - the brain of the system.
+/// Connects to Matrix, processes messages via LLM, manages tools and knowledge.
+///
+/// Message flow:
+/// 1. Matrix sync receives event
+/// 2. Conversation context + episodic memory recall
+/// 3. Knowledge context via Graph-RAG
+/// 4. Augmented prompt built with tools list
+/// 5. LLM generates response (possibly with tool calls)
+/// 6. Tool calls executed, results fed back to LLM
+/// 7. Final response sent to Matrix room
+
+agent ChatAgent {
+    // Matrix connection
+    MatrixConfig matrix_config;
+    bool connected;
+
+    // LLM
+    LlmConfig llm_config;
+
+    // Conversation & Knowledge
+    ConversationManager conversations;
+    KnowledgeManager knowledge;
+
+    // Tools
+    ToolRegistry tools;
+
+    // Config
+    string system_prompt;
+    bool auto_join;
+    int max_tool_loops;
+
+    // --- Lifecycle ---
+
+    public void on_start() {
+        connected = false;
+        max_tool_loops = 5;
+
+        // Load LLM config
+        llm_config = llm_config_from_env();
+        log_info($"LLM provider: {llm_config.provider}, model: {llm_config.model}");
+
+        // Load system prompt
+        system_prompt = env("AGENT_SYSTEM_PROMPT") or "You are a helpful AI assistant running as a Varg agent on the Matrix protocol. You have access to tools for managing knowledge, writing code, and file operations. When you need to use a tool, format your response with <tool_call>{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}</tool_call> tags. Be concise and helpful.";
+
+        auto_join = true;
+        var auto_join_env = env("AGENT_AUTO_JOIN") or "true";
+        if auto_join_env == "false" {
+            auto_join = false;
+        }
+
+        // Initialize conversation manager (20 messages per room)
+        conversations = conversation_manager_new(system_prompt, 20);
+
+        // Initialize knowledge manager
+        knowledge = knowledge_new("agent");
+
+        // Initialize and register tools
+        tools = tool_registry_new();
+        register_knowledge_tools(tools);
+        register_code_tools(tools);
+        register_file_tools(tools);
+
+        log_info("ChatAgent initialized");
+    }
+
+    // --- Matrix Connection ---
+
+    /// Connect to Matrix homeserver: try login, fallback to register.
+    public void Connect(NetworkAccess net) {
+        var homeserver = env("MATRIX_HOMESERVER") or "http://localhost:6167";
+        var username = env("MATRIX_USERNAME") or "agent";
+        var password = env("MATRIX_PASSWORD") or "agent_password";
+
+        log_info($"Connecting to Matrix at {homeserver} as {username}...");
+
+        try {
+            matrix_config = matrix_login(homeserver, username, password, net);
+            connected = true;
+        } catch login_err {
+            log_warn($"Login failed: {login_err}, attempting registration...");
+            try {
+                matrix_config = matrix_register(homeserver, username, password, net);
+                connected = true;
+            } catch reg_err {
+                log_error($"Registration also failed: {reg_err}");
+                throw $"Cannot connect to Matrix: login failed ({login_err}), register failed ({reg_err})";
+            }
+        }
+
+        // Set display name
+        var display_name = env("AGENT_DISPLAY_NAME") or "Varg Agent";
+        try {
+            matrix_set_display_name(matrix_config, display_name, net);
+        } catch err {
+            log_warn($"Could not set display name: {err}");
+        }
+
+        log_info($"Connected as {matrix_config.user_id}");
+    }
+
+    // --- Message Processing ---
+
+    /// Process a single incoming message event.
+    public void HandleMessage(MatrixEvent event, NetworkAccess net, FileAccess fs, SystemAccess sys, LlmAccess llm_cap) {
+        // Only handle text messages
+        if event.event_type != "m.room.message" {
+            return;
+        }
+        if event.msgtype != "m.text" {
+            return;
+        }
+        if event.body == "" {
+            return;
+        }
+
+        log_info($"Message from {event.sender} in {event.room_id}: {event.body}");
+
+        // Send typing indicator
+        try {
+            matrix_send_typing(matrix_config, event.room_id, true, 30000, net);
+        } catch err { }
+
+        // Add user message to conversation
+        conversation_add_message(conversations, event.room_id, "user", event.body);
+
+        // Recall relevant past conversations
+        var memory_context = conversation_recall(conversations, event.body, 3);
+
+        // Query knowledge graph for relevant context
+        var knowledge_context = knowledge_graph_rag(knowledge, event.body, 5);
+
+        // Build the augmented system prompt
+        var augmented_system = system_prompt;
+
+        if memory_context != "" {
+            augmented_system = $"{augmented_system}\n\n{memory_context}";
+        }
+
+        if knowledge_context != "" {
+            augmented_system = $"{augmented_system}\n\n{knowledge_context}";
+        }
+
+        // Add tool descriptions
+        var tools_text = tool_list_text(tools);
+        augmented_system = $"{augmented_system}\n\n{tools_text}\n\nTo use a tool, include: <tool_call>{{\"name\": \"tool_name\", \"arguments\": {{\"key\": \"value\"}}}}</tool_call>";
+
+        // Build message pairs for LLM
+        var message_pairs = conversation_to_message_pairs(conversations, event.room_id);
+
+        // Call LLM
+        var response = llm_chat_multi(llm_config, augmented_system, message_pairs, net, llm_cap);
+
+        // Tool call loop
+        var loop_count = 0;
+        while tool_has_calls(response) and loop_count < max_tool_loops {
+            var tool_calls = tool_parse_calls(response);
+            var tool_results = ToolResult[];
+
+            for call in tool_calls {
+                log_info($"Executing tool: {call.tool_name}");
+                var result = self.ExecuteTool(call, net, fs, sys);
+                tool_results.push(result);
+            }
+
+            // Feed tool results back to LLM
+            var results_text = tool_format_results(tool_results);
+            var text_portion = tool_extract_text(response);
+
+            // Add assistant response (with tool calls) and tool results to context
+            conversation_add_message(conversations, event.room_id, "assistant", text_portion);
+            conversation_add_message(conversations, event.room_id, "user", results_text);
+
+            // Rebuild message pairs and call LLM again
+            message_pairs = conversation_to_message_pairs(conversations, event.room_id);
+            response = llm_chat_multi(llm_config, augmented_system, message_pairs, net, llm_cap);
+            loop_count = loop_count + 1;
+        }
+
+        // Extract final text response (remove any remaining tool tags)
+        var final_response = tool_extract_text(response);
+        if final_response == "" {
+            final_response = response;
+        }
+
+        // Add assistant response to conversation
+        conversation_add_message(conversations, event.room_id, "assistant", final_response);
+
+        // Stop typing indicator
+        try {
+            matrix_send_typing(matrix_config, event.room_id, false, 0, net);
+        } catch err { }
+
+        // Send response to Matrix
+        try {
+            matrix_send_message(matrix_config, event.room_id, final_response, net);
+        } catch err {
+            log_error($"Failed to send message: {err}");
+        }
+    }
+
+    // --- Tool Execution ---
+
+    /// Execute a single tool call and return the result.
+    public ToolResult ExecuteTool(ToolCall call, NetworkAccess net, FileAccess fs, SystemAccess sys) -> ToolResult {
+        var result = "";
+        var success = true;
+
+        try {
+            match call.tool_name {
+                // Knowledge tools
+                "add_knowledge" => {
+                    result = tool_add_knowledge(knowledge, call.arguments);
+                }
+                "add_text_knowledge" => {
+                    result = tool_add_text_knowledge(knowledge, call.arguments);
+                }
+                "search_knowledge" => {
+                    result = tool_search_knowledge(knowledge, call.arguments);
+                }
+                "graph_rag_query" => {
+                    result = tool_graph_rag_query(knowledge, call.arguments);
+                }
+                "knowledge_stats" => {
+                    result = tool_knowledge_stats(knowledge, call.arguments);
+                }
+
+                // Code tools
+                "write_tool" => {
+                    result = tool_write_tool(call.arguments, fs, sys);
+                }
+                "run_varg_code" => {
+                    result = tool_run_varg_code(call.arguments, fs, sys);
+                }
+                "list_tools" => {
+                    result = tool_list_tools(call.arguments, fs);
+                }
+                "read_tool_source" => {
+                    result = tool_read_tool_source(call.arguments, fs);
+                }
+                "compile_varg" => {
+                    result = tool_compile_varg(call.arguments, sys);
+                }
+
+                // File tools
+                "read_file" => {
+                    result = tool_read_file(call.arguments, fs);
+                }
+                "write_file" => {
+                    result = tool_write_file(call.arguments, fs);
+                }
+                "append_file" => {
+                    result = tool_append_file(call.arguments, fs);
+                }
+                "list_directory" => {
+                    result = tool_list_directory(call.arguments, fs);
+                }
+                "path_exists" => {
+                    result = tool_path_exists(call.arguments, fs);
+                }
+                "create_directory" => {
+                    result = tool_create_directory(call.arguments, fs);
+                }
+
+                _ => {
+                    result = $"Unknown tool: {call.tool_name}";
+                    success = false;
+                }
+            }
+        } catch err {
+            result = $"Tool execution error: {err}";
+            success = false;
+        }
+
+        log_info($"Tool {call.tool_name}: {result.substring(0, 100)}...");
+
+        return ToolResult {
+            tool_name: call.tool_name,
+            result: result,
+            success: success
+        };
+    }
+
+    // --- Auto-Join ---
+
+    /// Handle room invites by auto-joining.
+    public void HandleInvites(string[] invited_rooms, NetworkAccess net) {
+        if !auto_join {
+            return;
+        }
+
+        for room_id in invited_rooms {
+            log_info($"Invited to room {room_id}, auto-joining...");
+            try {
+                matrix_join_room(matrix_config, room_id, net);
+            } catch err {
+                log_error($"Failed to join {room_id}: {err}");
+            }
+        }
+    }
+
+    // --- Main Loop ---
+
+    /// The main sync loop. Polls Matrix for events and processes them.
+    public void RunSyncLoop(NetworkAccess net, FileAccess fs, SystemAccess sys, LlmAccess llm_cap) {
+        var since = "";
+        var initial_sync = true;
+
+        log_info("Starting Matrix sync loop...");
+
+        while true {
+            try {
+                var sync_json = matrix_sync(matrix_config, since, 30000, net);
+                var sync_result = parse_sync_response(sync_json, matrix_config.user_id);
+
+                since = sync_result.next_batch;
+
+                // Handle invites
+                self.HandleInvites(sync_result.invited_rooms, net);
+
+                // Skip events from the initial sync (they're historical)
+                if initial_sync {
+                    initial_sync = false;
+                    log_info($"Initial sync complete. Listening for messages...");
+                    continue;
+                }
+
+                // Process new events
+                for event in sync_result.events {
+                    try {
+                        self.HandleMessage(event, net, fs, sys, llm_cap);
+                    } catch err {
+                        log_error($"Error handling message: {err}");
+                    }
+                }
+            } catch err {
+                log_error($"Sync error: {err}");
+                sleep(5000);
+            }
+        }
+    }
+
+    // --- Entry Point ---
+
+    public void Run() {
+        log_info("=== Varg Matrix Agent ===");
+
+        unsafe {
+            var net = NetworkAccess {};
+            var fs = FileAccess {};
+            var sys = SystemAccess {};
+            var llm_cap = LlmAccess {};
+
+            // Connect to Matrix
+            self.Connect(net);
+
+            // Start the sync loop (blocks forever)
+            self.RunSyncLoop(net, fs, sys, llm_cap);
+        }
+    }
+}

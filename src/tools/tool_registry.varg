@@ -1,0 +1,210 @@
+/// Dynamic tool registration, dispatch, and LLM function-calling integration.
+/// Tools are registered with name, description, and parameter definitions.
+/// The registry generates JSON schemas for LLM prompts and dispatches calls.
+
+// --- Data Structures ---
+
+struct ToolParam {
+    string name;
+    string param_type;
+    string description;
+    bool required;
+}
+
+struct ToolDefinition {
+    string name;
+    string description;
+    ToolParam[] params;
+}
+
+struct ToolCall {
+    string tool_name;
+    map<string, string> arguments;
+}
+
+struct ToolResult {
+    string tool_name;
+    string result;
+    bool success;
+}
+
+struct ToolRegistry {
+    ToolDefinition[] tools;
+    map<string, string> tool_handlers;
+}
+
+// --- Initialization ---
+
+/// Create a new empty tool registry.
+fn tool_registry_new() -> ToolRegistry {
+    return ToolRegistry {
+        tools: [],
+        tool_handlers: {}
+    };
+}
+
+// --- Registration ---
+
+/// Register a new tool with the registry.
+fn tool_register(ToolRegistry registry, string name, string description, ToolParam[] params) {
+    registry.tools.push(ToolDefinition {
+        name: name,
+        description: description,
+        params: params
+    });
+    log_debug($"Tool registered: {name}");
+}
+
+/// Create a tool parameter definition.
+fn tool_param(string name, string param_type, string description, bool required) -> ToolParam {
+    return ToolParam {
+        name: name,
+        param_type: param_type,
+        description: description,
+        required: required
+    };
+}
+
+// --- JSON Schema Generation (for LLM function-calling prompts) ---
+
+/// Generate a JSON description of all available tools for inclusion in LLM prompts.
+fn tool_list_json(ToolRegistry registry) -> string {
+    if registry.tools.len() == 0 {
+        return "[]";
+    }
+
+    var result = "[\n";
+    var first = true;
+
+    for tool in registry.tools {
+        if !first {
+            result = $"{result},\n";
+        }
+
+        var params_json = "";
+        var params_first = true;
+        for p in tool.params {
+            if !params_first {
+                params_json = $"{params_json}, ";
+            }
+            params_json = $"{params_json}{{\"name\": \"{p.name}\", \"type\": \"{p.param_type}\", \"description\": \"{json_escape_str(p.description)}\", \"required\": {p.required}}}";
+            params_first = false;
+        }
+
+        result = $"{result}  {{\"name\": \"{tool.name}\", \"description\": \"{json_escape_str(tool.description)}\", \"parameters\": [{params_json}]}}";
+        first = false;
+    }
+
+    result = $"{result}\n]";
+    return result;
+}
+
+/// Generate a human-readable tool list for system prompts.
+fn tool_list_text(ToolRegistry registry) -> string {
+    if registry.tools.len() == 0 {
+        return "No tools available.";
+    }
+
+    var result = "Available tools:\n";
+    for tool in registry.tools {
+        result = $"{result}\n- {tool.name}: {tool.description}";
+        if tool.params.len() > 0 {
+            result = $"{result}\n  Parameters:";
+            for p in tool.params {
+                var req = "";
+                if p.required {
+                    req = " (required)";
+                }
+                result = $"{result}\n    - {p.name} ({p.param_type}): {p.description}{req}";
+            }
+        }
+    }
+    return result;
+}
+
+// --- Tool Call Parsing ---
+
+/// Parse tool calls from LLM response text.
+/// Expects format: <tool_call>{"name": "tool_name", "arguments": {"key": "value"}}</tool_call>
+fn tool_parse_calls(string llm_response) -> ToolCall[] {
+    var calls = ToolCall[];
+
+    // Look for tool call markers in the response
+    var remaining = llm_response;
+    var start_tag = "<tool_call>";
+    var end_tag = "</tool_call>";
+
+    while remaining.contains(start_tag) {
+        var start_idx = remaining.index_of(start_tag);
+        var after_tag = remaining.substring(start_idx + start_tag.len(), remaining.len());
+        var end_idx = after_tag.index_of(end_tag);
+
+        if end_idx >= 0 {
+            var json_str = after_tag.substring(0, end_idx).trim();
+            var parsed = json_parse(json_str);
+            var tool_name = json_get(parsed, "name");
+
+            // Parse arguments
+            var args_str = json_get(parsed, "arguments");
+            var args = map<string, string>{};
+            if args_str != "" {
+                var args_parsed = json_parse(args_str);
+                // Extract keys from the arguments object
+                var keys = args_parsed.keys();
+                for key in keys {
+                    args[key] = json_get(args_parsed, key);
+                }
+            }
+
+            calls.push(ToolCall {
+                tool_name: tool_name,
+                arguments: args
+            });
+
+            remaining = after_tag.substring(end_idx + end_tag.len(), after_tag.len());
+        } else {
+            break;
+        }
+    }
+
+    return calls;
+}
+
+/// Check if an LLM response contains tool calls.
+fn tool_has_calls(string llm_response) -> bool {
+    return llm_response.contains("<tool_call>");
+}
+
+/// Extract the text portion of an LLM response (everything outside tool_call tags).
+fn tool_extract_text(string llm_response) -> string {
+    var result = llm_response;
+    var start_tag = "<tool_call>";
+    var end_tag = "</tool_call>";
+
+    while result.contains(start_tag) {
+        var start_idx = result.index_of(start_tag);
+        var end_idx = result.index_of(end_tag);
+        if end_idx >= 0 {
+            var before = result.substring(0, start_idx);
+            var after = result.substring(end_idx + end_tag.len(), result.len());
+            result = $"{before}{after}";
+        } else {
+            break;
+        }
+    }
+
+    return result.trim();
+}
+
+/// Format tool results for feeding back into the LLM.
+fn tool_format_results(ToolResult[] results) -> string {
+    var output = "Tool execution results:\n";
+    for r in results {
+        var status = "success";
+        if !r.success {
+            status = "error";
+        }
+        output = $"{output}<tool_result name=\"{r.tool_name}\" status=\"{status}\">{r.result}</tool_result>\n";
+    }
+    return output;
+}

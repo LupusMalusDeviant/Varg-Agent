@@ -1,0 +1,109 @@
+/// Knowledge graph CRUD tools exposed as agent capabilities.
+/// These tools allow the LLM to store and retrieve structured knowledge.
+
+/// Add a knowledge triple to the graph.
+/// subject --predicate--> object (e.g., "Varg" --"is_written_in"--> "Rust")
+@[McpTool("add_knowledge", "Store a fact as a subject-predicate-object triple in the knowledge graph")]
+fn tool_add_knowledge(KnowledgeManager km, map<string, string> args) -> string {
+    var subject = args["subject"] or "";
+    var predicate = args["predicate"] or "";
+    var object = args["object"] or "";
+
+    if subject == "" or predicate == "" or object == "" {
+        return "Error: subject, predicate, and object are all required";
+    }
+
+    knowledge_add(km, subject, predicate, object, {});
+    return $"Stored: {subject} --{predicate}--> {object}";
+}
+
+/// Store unstructured text as knowledge.
+@[McpTool("add_text_knowledge", "Store a text passage in the knowledge base for semantic retrieval")]
+fn tool_add_text_knowledge(KnowledgeManager km, map<string, string> args) -> string {
+    var text = args["text"] or "";
+    var source = args["source"] or "agent";
+
+    if text == "" {
+        return "Error: text is required";
+    }
+
+    knowledge_add_text(km, text, {"source": source});
+    return $"Stored text knowledge ({text.len()} chars)";
+}
+
+/// Search knowledge by semantic similarity.
+@[McpTool("search_knowledge", "Search the knowledge base using natural language")]
+fn tool_search_knowledge(KnowledgeManager km, map<string, string> args) -> string {
+    var query = args["query"] or "";
+    var top_k_str = args["top_k"] or "5";
+
+    if query == "" {
+        return "Error: query is required";
+    }
+
+    // Parse top_k (default to 5)
+    var top_k = 5;
+
+    var results = knowledge_search(km, query, top_k);
+    if results.len() == 0 {
+        return "No relevant knowledge found.";
+    }
+
+    var output = $"Found {results.len()} results:\n";
+    var i = 1;
+    for result in results {
+        output = $"{output}{i}. {result}\n";
+        i = i + 1;
+    }
+    return output;
+}
+
+/// Query the knowledge graph using Graph-RAG.
+@[McpTool("graph_rag_query", "Query knowledge using combined graph traversal and semantic search")]
+fn tool_graph_rag_query(KnowledgeManager km, map<string, string> args) -> string {
+    var query = args["query"] or "";
+
+    if query == "" {
+        return "Error: query is required";
+    }
+
+    var context = knowledge_graph_rag(km, query, 5);
+    if context == "" {
+        return "No relevant knowledge found.";
+    }
+
+    return context;
+}
+
+/// Get knowledge store statistics.
+@[McpTool("knowledge_stats", "Get statistics about the knowledge store")]
+fn tool_knowledge_stats(KnowledgeManager km, map<string, string> args) -> string {
+    return knowledge_stats(km);
+}
+
+/// Register all knowledge tools with the tool registry.
+fn register_knowledge_tools(ToolRegistry registry) {
+    tool_register(registry, "add_knowledge", "Store a fact as a subject-predicate-object triple in the knowledge graph", [
+        tool_param("subject", "string", "The subject entity", true),
+        tool_param("predicate", "string", "The relationship type", true),
+        tool_param("object", "string", "The object entity", true)
+    ]);
+
+    tool_register(registry, "add_text_knowledge", "Store a text passage in the knowledge base for semantic retrieval", [
+        tool_param("text", "string", "The text to store", true),
+        tool_param("source", "string", "Source attribution", false)
+    ]);
+
+    tool_register(registry, "search_knowledge", "Search the knowledge base using natural language", [
+        tool_param("query", "string", "Natural language search query", true),
+        tool_param("top_k", "string", "Number of results to return (default: 5)", false)
+    ]);
+
+    tool_register(registry, "graph_rag_query", "Query knowledge using combined graph traversal and semantic search", [
+        tool_param("query", "string", "Natural language query", true)
+    ]);
+
+    tool_register(registry, "knowledge_stats", "Get statistics about the knowledge store", []);
+
+    log_info("Knowledge tools registered");
+}

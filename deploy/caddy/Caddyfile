@@ -1,0 +1,47 @@
+# Caddy reverse proxy configuration for Varg Matrix Agent
+#
+# Mode 1: IP-only (development) - uses HTTP, no TLS
+# Mode 2: Domain (production) - automatic HTTPS via Let's Encrypt
+#
+# The setup.sh script configures this automatically.
+
+# ---- IP-Only Mode (default) ----
+# When SERVER_NAME is an IP address, Caddy serves plain HTTP.
+
+:{$HTTP_PORT:80} {
+    # Matrix Client-Server API + Federation
+    handle /_matrix/* {
+        reverse_proxy conduit:6167
+    }
+
+    # Matrix well-known for client discovery
+    handle /.well-known/matrix/* {
+        reverse_proxy conduit:6167
+    }
+
+    # Element Web UI (default route)
+    handle {
+        reverse_proxy element:80
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}
+
+# ---- Domain Mode ----
+# Uncomment and replace with your domain when ready.
+# Caddy will auto-provision TLS certificates.
+#
+# matrix.example.com {
+#     handle /_matrix/* {
+#         reverse_proxy conduit:6167
+#     }
+#     handle /.well-known/matrix/* {
+#         reverse_proxy conduit:6167
+#     }
+#     handle {
+#         reverse_proxy element:80
+#     }
+# }

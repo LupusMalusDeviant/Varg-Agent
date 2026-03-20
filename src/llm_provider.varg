@@ -1,0 +1,200 @@
+/// Multi-provider LLM abstraction.
+/// Supports: Ollama, OpenAI, Anthropic (native), Google Gemini (HTTP).
+///
+/// Provider selection via VARG_LLM_PROVIDER env var.
+/// Gemini is implemented at the Varg level via direct HTTP calls.
+
+// --- Configuration ---
+
+struct LlmConfig {
+    string provider;
+    string model;
+    string api_key;
+    string base_url;
+}
+
+/// Load LLM configuration from environment variables.
+fn llm_config_from_env() -> LlmConfig {
+    var provider = env("VARG_LLM_PROVIDER") or "ollama";
+    var model = env("VARG_LLM_MODEL") or "";
+    var api_key = "";
+    var base_url = env("VARG_LLM_URL") or "";
+
+    // Set provider-specific defaults
+    match provider {
+        "ollama" => {
+            if model == "" { model = "llama3"; }
+            if base_url == "" { base_url = "http://127.0.0.1:11434"; }
+        }
+        "openai" => {
+            if model == "" { model = "gpt-4o"; }
+            api_key = env("OPENAI_API_KEY") or "";
+        }
+        "anthropic" => {
+            if model == "" { model = "claude-sonnet-4-20250514"; }
+            api_key = env("ANTHROPIC_API_KEY") or "";
+        }
+        "gemini" => {
+            if model == "" { model = "gemini-2.0-flash"; }
+            api_key = env("GEMINI_API_KEY") or "";
+        }
+        _ => {
+            log_warn($"Unknown LLM provider: {provider}, falling back to ollama");
+            provider = "ollama";
+            if model == "" { model = "llama3"; }
+        }
+    }
+
+    return LlmConfig {
+        provider: provider,
+        model: model,
+        api_key: api_key,
+        base_url: base_url
+    };
+}
+
+// --- Gemini Implementation (via HTTP) ---
+
+/// Build the Gemini API request body from a list of message pairs.
+/// messages is an array of strings alternating: role, content, role, content, ...
+fn gemini_build_body(string system_prompt, string[] message_pairs) -> string {
+    var contents = "";
+    var first = true;
+
+    // Add conversation messages
+    var i = 0;
+    while i < message_pairs.len() - 1 {
+        var role = message_pairs[i];
+        var content = message_pairs[i + 1];
+
+        // Gemini uses "user" and "model" roles
+        var gemini_role = "user";
+        if role == "assistant" {
+            gemini_role = "model";
+        }
+
+        if !first {
+            contents = $"{contents}, ";
+        }
+        contents = $"{contents}{{\"role\": \"{gemini_role}\", \"parts\": [{{\"text\": \"{json_escape_str(content)}\"}}]}}";
+        first = false;
+        i = i + 2;
+    }
+
+    var body = $"{{\"contents\": [{contents}]";
+
+    // Add system instruction if provided
+    if system_prompt != "" {
+        body = $"{body}, \"systemInstruction\": {{\"parts\": [{{\"text\": \"{json_escape_str(system_prompt)}\"}}]}}";
+    }
+
+    body = $"{body}}}";
+    return body;
+}
+
+/// Call Google Gemini API directly via HTTP.
+fn gemini_chat(LlmConfig config, string system_prompt, string[] message_pairs, NetworkAccess net) -> string {
+    var url = $"https://generativelanguage.googleapis.com/v1beta/models/{config.model}:generateContent?key={config.api_key}";
+    var headers = {"Content-Type": "application/json"};
+    var body = gemini_build_body(system_prompt, message_pairs);
+
+    var resp = retry(2, backoff: 1000) {
+        http_request(url, "POST", headers, body)?
+    } fallback {
+        "{\"error\": \"Gemini API call failed after retries\"}"
+    };
+
+    var parsed = json_parse(resp);
+    var resp_body = json_get(parsed, "body");
+    var body_parsed = json_parse(resp_body);
+
+    // Extract: candidates[0].content.parts[0].text
+    var candidates = json_get_array(body_parsed, "candidates");
+    if candidates.len() > 0 {
+        var candidate = json_parse(candidates[0]);
+        var content = json_get(candidate, "content");
+        var content_parsed = json_parse(content);
+        var parts = json_get_array(content_parsed, "parts");
+        if parts.len() > 0 {
+            var part = json_parse(parts[0]);
+            return json_get(part, "text");
+        }
+    }
+
+    return "Error: No response from Gemini";
+}
+
+/// Simple single-prompt inference with Gemini.
+fn gemini_infer(LlmConfig config, string prompt, NetworkAccess net) -> string {
+    return gemini_chat(config, "", ["user", prompt], net);
+}
+
+// --- Unified Interface ---
+
+/// Send a chat message to the configured LLM provider.
+/// For native providers (ollama/openai/anthropic), uses Varg's built-in llm_chat.
+/// For Gemini, uses the HTTP implementation above.
+///
+/// system_prompt: System-level instructions for the LLM.
+/// message_pairs: Alternating role/content pairs ["user", "hello", "assistant", "hi", "user", "how are you"]
+/// Returns the LLM response text.
+fn llm_chat_multi(LlmConfig config, string system_prompt, string[] message_pairs, NetworkAccess net, LlmAccess llm_cap) -> string {
+    match config.provider {
+        "gemini" => {
+            return gemini_chat(config, system_prompt, message_pairs, net);
+        }
+        _ => {
+            // Use native Varg LLM runtime (ollama/openai/anthropic)
+            // Build context and use llm_chat
+            var ctx = create_context("chat");
+
+            // The last user message is the prompt
+            var prompt = "";
+            if message_pairs.len() >= 2 {
+                prompt = message_pairs[message_pairs.len() - 1];
+            }
+
+            // Prepend system prompt + context as a combined prompt
+            var full_prompt = "";
+            if system_prompt != "" {
+                full_prompt = $"System: {system_prompt}\n\n";
+            }
+
+            // Add conversation history
+            var i = 0;
+            while i < message_pairs.len() - 2 {
+                var role = message_pairs[i];
+                var content = message_pairs[i + 1];
+                full_prompt = $"{full_prompt}{role}: {content}\n";
+                i = i + 2;
+            }
+
+            full_prompt = $"{full_prompt}user: {prompt}";
+
+            var response = retry(2, backoff: 1000) {
+                llm_chat(ctx, full_prompt, config.model)
+            } fallback {
+                "Error: LLM inference failed after retries"
+            };
+
+            return response;
+        }
+    }
+}
+
+/// Simple single-prompt inference, provider-agnostic.
+fn llm_infer_multi(LlmConfig config, string prompt, NetworkAccess net, LlmAccess llm_cap) -> string {
+    match config.provider {
+        "gemini" => {
+            return gemini_infer(config, prompt, net);
+        }
+        _ => {
+            var response = retry(2, backoff: 1000) {
+                llm_infer(prompt, config.model)
+            } fallback {
+                "Error: LLM inference failed after retries"
+            };
+            return response;
+        }
+    }
+}

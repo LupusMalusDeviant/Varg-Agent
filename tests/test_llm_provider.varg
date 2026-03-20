@@ -1,0 +1,69 @@
+/// Tests for the multi-provider LLM abstraction.
+/// Run: vargc test tests/test_llm_provider.varg
+
+agent LlmProviderTests {
+
+    @[Test]
+    public void test_gemini_build_body_simple() {
+        var body = gemini_build_body("", ["user", "Hello!"]);
+        assert_contains(body, "\"role\": \"user\"");
+        assert_contains(body, "Hello!");
+        assert_contains(body, "\"contents\":");
+    }
+
+    @[Test]
+    public void test_gemini_build_body_with_system() {
+        var body = gemini_build_body("You are helpful.", ["user", "Hi"]);
+        assert_contains(body, "\"systemInstruction\":");
+        assert_contains(body, "You are helpful.");
+    }
+
+    @[Test]
+    public void test_gemini_build_body_multi_turn() {
+        var pairs = ["user", "Hello", "assistant", "Hi there!", "user", "How are you?"];
+        var body = gemini_build_body("", pairs);
+
+        // Assistant should be mapped to "model" for Gemini
+        assert_contains(body, "\"role\": \"model\"");
+        assert_contains(body, "\"role\": \"user\"");
+        assert_contains(body, "How are you?");
+    }
+
+    @[Test]
+    public void test_gemini_build_body_escapes_special_chars() {
+        var body = gemini_build_body("", ["user", "He said \"hello\""]);
+        assert_contains(body, "\\\"hello\\\"");
+    }
+
+    @[Test]
+    public void test_llm_config_defaults_ollama() {
+        // When no env vars are set, should default to ollama
+        var config = LlmConfig {
+            provider: "ollama",
+            model: "llama3",
+            api_key: "",
+            base_url: "http://127.0.0.1:11434"
+        };
+
+        assert_eq(config.provider, "ollama");
+        assert_eq(config.model, "llama3");
+    }
+
+    @[Test]
+    public void test_llm_config_gemini() {
+        var config = LlmConfig {
+            provider: "gemini",
+            model: "gemini-2.0-flash",
+            api_key: "test_key",
+            base_url: ""
+        };
+
+        assert_eq(config.provider, "gemini");
+        assert_eq(config.model, "gemini-2.0-flash");
+        assert_eq(config.api_key, "test_key");
+    }
+
+    public void Run() {
+        print "LLM provider tests - use: vargc test tests/test_llm_provider.varg";
+    }
+}

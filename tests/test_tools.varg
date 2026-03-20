@@ -1,0 +1,148 @@
+/// Tests for the tool system (registry, parsing, dispatch).
+/// Run: vargc test tests/test_tools.varg
+
+agent ToolTests {
+
+    @[Test]
+    public void test_tool_registry_new() {
+        var registry = tool_registry_new();
+        assert_eq(registry.tools.len(), 0);
+    }
+
+    @[Test]
+    public void test_tool_register() {
+        var registry = tool_registry_new();
+
+        tool_register(registry, "test_tool", "A test tool", [
+            tool_param("input", "string", "Input text", true)
+        ]);
+
+        assert_eq(registry.tools.len(), 1);
+        assert_eq(registry.tools[0].name, "test_tool");
+        assert_eq(registry.tools[0].description, "A test tool");
+        assert_eq(registry.tools[0].params.len(), 1);
+    }
+
+    @[Test]
+    public void test_tool_list_json() {
+        var registry = tool_registry_new();
+
+        tool_register(registry, "greet", "Say hello", [
+            tool_param("name", "string", "Name to greet", true)
+        ]);
+
+        var json = tool_list_json(registry);
+        assert_contains(json, "\"name\": \"greet\"");
+        assert_contains(json, "\"description\": \"Say hello\"");
+        assert_contains(json, "\"name\": \"name\"");
+    }
+
+    @[Test]
+    public void test_tool_list_json_empty() {
+        var registry = tool_registry_new();
+        var json = tool_list_json(registry);
+        assert_eq(json, "[]");
+    }
+
+    @[Test]
+    public void test_tool_list_text() {
+        var registry = tool_registry_new();
+
+        tool_register(registry, "search", "Search knowledge", [
+            tool_param("query", "string", "Search query", true),
+            tool_param("limit", "string", "Max results", false)
+        ]);
+
+        var text = tool_list_text(registry);
+        assert_contains(text, "search: Search knowledge");
+        assert_contains(text, "query (string)");
+        assert_contains(text, "(required)");
+    }
+
+    @[Test]
+    public void test_tool_parse_calls_single() {
+        var response = "Let me search for that.\n<tool_call>{\"name\": \"search\", \"arguments\": {\"query\": \"Varg language\"}}</tool_call>";
+
+        var calls = tool_parse_calls(response);
+        assert_eq(calls.len(), 1);
+        assert_eq(calls[0].tool_name, "search");
+        assert_eq(calls[0].arguments["query"], "Varg language");
+    }
+
+    @[Test]
+    public void test_tool_parse_calls_multiple() {
+        var response = """
+        I'll search and store that.
+        <tool_call>{"name": "search", "arguments": {"query": "test"}}</tool_call>
+        <tool_call>{"name": "add_knowledge", "arguments": {"subject": "A", "predicate": "is", "object": "B"}}</tool_call>
+        """;
+
+        var calls = tool_parse_calls(response);
+        assert_eq(calls.len(), 2);
+        assert_eq(calls[0].tool_name, "search");
+        assert_eq(calls[1].tool_name, "add_knowledge");
+    }
+
+    @[Test]
+    public void test_tool_parse_calls_none() {
+        var response = "Just a plain text response with no tools.";
+        var calls = tool_parse_calls(response);
+        assert_eq(calls.len(), 0);
+    }
+
+    @[Test]
+    public void test_tool_has_calls() {
+        assert_true(tool_has_calls("text <tool_call>{}</tool_call> more text"));
+        assert_false(tool_has_calls("no tools here"));
+    }
+
+    @[Test]
+    public void test_tool_extract_text() {
+        var response = "Hello! <tool_call>{\"name\": \"test\"}</tool_call> How are you?";
+        var text = tool_extract_text(response);
+        assert_eq(text, "Hello!  How are you?");
+    }
+
+    @[Test]
+    public void test_tool_format_results() {
+        var results = [
+            ToolResult { tool_name: "search", result: "Found 3 items", success: true },
+            ToolResult { tool_name: "write", result: "Permission denied", success: false }
+        ];
+
+        var formatted = tool_format_results(results);
+        assert_contains(formatted, "status=\"success\"");
+        assert_contains(formatted, "status=\"error\"");
+        assert_contains(formatted, "Found 3 items");
+    }
+
+    @[Test]
+    public void test_tool_param_creation() {
+        var p = tool_param("query", "string", "Search query", true);
+        assert_eq(p.name, "query");
+        assert_eq(p.param_type, "string");
+        assert_eq(p.description, "Search query");
+        assert_true(p.required);
+    }
+
+    @[Test]
+    public void test_register_all_tool_groups() {
+        var registry = tool_registry_new();
+
+        register_knowledge_tools(registry);
+        var after_knowledge = registry.tools.len();
+        assert_true(after_knowledge > 0, "Knowledge tools should be registered");
+
+        register_code_tools(registry);
+        var after_code = registry.tools.len();
+        assert_true(after_code > after_knowledge, "Code tools should be added");
+
+        register_file_tools(registry);
+        var after_file = registry.tools.len();
+        assert_true(after_file > after_code, "File tools should be added");
+    }
+
+    public void Run() {
+        print "Tool tests - use: vargc test tests/test_tools.varg";
+    }
+}

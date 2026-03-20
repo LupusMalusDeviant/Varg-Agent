@@ -1,0 +1,17 @@
+## Development override: direct port access, no TLS, no Caddy.
+## Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+version: '3.8'
+
+services:
+  conduit:
+    ports:
+      - "${CONDUIT_PORT:-6167}:6167"
+
+  element:
+    ports:
+      - "${ELEMENT_PORT:-8080}:80"
+
+  caddy:
+    profiles:
+      - disabled

@@ -1,0 +1,154 @@
+/// Code tools - the self-extending capability.
+/// The agent can write, compile, run, and manage Varg code.
+/// This is the core of the agent's ability to create its own tools.
+
+/// Write a new Varg tool file, compile it, and report status.
+@[McpTool("write_tool", "Write a new Varg tool file and compile it")]
+fn tool_write_tool(map<string, string> args, FileAccess fs, SystemAccess sys) -> string {
+    var name = args["name"] or "";
+    var code = args["code"] or "";
+    var description = args["description"] or "Custom tool";
+
+    if name == "" or code == "" {
+        return "Error: name and code are required";
+    }
+
+    // Sanitize name (only alphanumeric and underscores)
+    var safe_name = name.replace(" ", "_").replace("-", "_").to_lower();
+    var path = $"src/tools/{safe_name}.varg";
+
+    // Write the tool file
+    try {
+        fs_write(path, code)?;
+    } catch err {
+        return $"Error writing file: {err}";
+    }
+
+    // Try to compile it
+    try {
+        var result = exec($"vargc build {path}")?;
+        return $"Tool '{safe_name}' created and compiled successfully at {path}.\nCompiler output: {result}";
+    } catch err {
+        return $"Tool '{safe_name}' written to {path} but compilation failed: {err}\nThe file has been saved - you can fix the code and try again.";
+    }
+}
+
+/// Run a Varg code snippet and return the output.
+@[McpTool("run_varg_code", "Execute a Varg code snippet and return the output")]
+fn tool_run_varg_code(map<string, string> args, FileAccess fs, SystemAccess sys) -> string {
+    var code = args["code"] or "";
+
+    if code == "" {
+        return "Error: code is required";
+    }
+
+    // Wrap in main if not already an agent or fn main
+    var full_code = code;
+    if !code.contains("fn main()") and !code.contains("agent ") {
+        full_code = $"fn main() {{\n{code}\n}}";
+    }
+
+    var tmp_path = "tmp_run_code.varg";
+
+    try {
+        fs_write(tmp_path, full_code)?;
+        var output = exec($"vargc run {tmp_path}")?;
+        delete_file(tmp_path)?;
+        return $"Output:\n{output}";
+    } catch err {
+        // Clean up temp file
+        try { delete_file(tmp_path)?; } catch e { }
+        return $"Execution error: {err}";
+    }
+}
+
+/// List all custom tool files in the tools directory.
+@[McpTool("list_tools", "List all available custom Varg tool files")]
+fn tool_list_tools(map<string, string> args, FileAccess fs) -> string {
+    try {
+        var files = fs_read_dir("src/tools")?;
+        var tool_files = string[];
+
+        for file in files {
+            if file.ends_with(".varg") {
+                tool_files.push(file);
+            }
+        }
+
+        if tool_files.len() == 0 {
+            return "No custom tool files found.";
+        }
+
+        var result = $"Found {tool_files.len()} tool files:\n";
+        for f in tool_files {
+            result = $"{result}- {f}\n";
+        }
+        return result;
+    } catch err {
+        return $"Error listing tools: {err}";
+    }
+}
+
+/// Read the source code of a tool file.
+@[McpTool("read_tool_source", "Read the source code of a Varg tool file")]
+fn tool_read_tool_source(map<string, string> args, FileAccess fs) -> string {
+    var name = args["name"] or "";
+
+    if name == "" {
+        return "Error: name is required";
+    }
+
+    var path = $"src/tools/{name}";
+    if !path.ends_with(".varg") {
+        path = $"{path}.varg";
+    }
+
+    try {
+        var content = fs_read(path)?;
+        return $"Source of {path}:\n```varg\n{content}\n```";
+    } catch err {
+        return $"Error reading {path}: {err}";
+    }
+}
+
+/// Compile a specific Varg file and report the result.
+@[McpTool("compile_varg", "Compile a Varg source file")]
+fn tool_compile_varg(map<string, string> args, SystemAccess sys) -> string {
+    var path = args["path"] or "";
+
+    if path == "" {
+        return "Error: path is required";
+    }
+
+    try {
+        var output = exec($"vargc build {path}")?;
+        return $"Compilation successful:\n{output}";
+    } catch err {
+        return $"Compilation failed:\n{err}";
+    }
+}
+
+/// Register all code tools with the tool registry.
+fn register_code_tools(ToolRegistry registry) {
+    tool_register(registry, "write_tool", "Write a new Varg tool file and compile it", [
+        tool_param("name", "string", "Name for the tool file (without .varg extension)", true),
+        tool_param("code", "string", "The Varg source code", true),
+        tool_param("description", "string", "Description of what the tool does", false)
+    ]);
+
+    tool_register(registry, "run_varg_code", "Execute a Varg code snippet and return the output", [
+        tool_param("code", "string", "Varg code to execute", true)
+    ]);
+
+    tool_register(registry, "list_tools", "List all available custom Varg tool files", []);
+
+    tool_register(registry, "read_tool_source", "Read the source code of a Varg tool file", [
+        tool_param("name", "string", "Tool file name", true)
+    ]);
+
+    tool_register(registry, "compile_varg", "Compile a Varg source file", [
+        tool_param("path", "string", "Path to the .varg file", true)
+    ]);
+
+    log_info("Code tools registered");
+}

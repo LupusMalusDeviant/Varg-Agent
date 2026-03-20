@@ -1,0 +1,29 @@
+/// Varg Matrix Agent - Entry Point
+///
+/// A self-extending AI chat agent that:
+/// - Communicates via the Matrix protocol
+/// - Uses multiple LLM providers (Ollama, OpenAI, Anthropic, Gemini)
+/// - Manages knowledge via Graph-RAG
+/// - Can write and compile its own Varg tools
+///
+/// Usage: vargc run src/main.varg
+///
+/// Required environment variables:
+///   MATRIX_HOMESERVER  - Matrix homeserver URL (e.g., http://localhost:6167)
+///   MATRIX_USERNAME    - Bot username
+///   MATRIX_PASSWORD    - Bot password
+///   VARG_LLM_PROVIDER  - LLM provider: ollama/openai/anthropic/gemini
+///
+/// See config/agent.env.example for all options.
+
+agent App {
+    public void Run() {
+        log_info("Starting Varg Matrix Agent...");
+
+        var agent = spawn ChatAgent {};
+
+        // The ChatAgent.Run() blocks on the sync loop.
+        // This agent stays alive as the supervisor.
+        log_info("Agent spawned. Press Ctrl+C to stop.");
+    }
+}

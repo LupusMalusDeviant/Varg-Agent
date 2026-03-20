@@ -1,0 +1,128 @@
+/// Per-room conversation context manager.
+/// Maintains conversation history, episodic memory recall,
+/// and system prompt injection.
+
+// --- Data Structures ---
+
+struct ConversationEntry {
+    string role;
+    string content;
+    int timestamp;
+}
+
+struct RoomConversation {
+    string room_id;
+    ConversationEntry[] history;
+    int max_history;
+}
+
+struct ConversationManager {
+    map<string, RoomConversation> rooms;
+    string system_prompt;
+    string memory_handle;
+    int max_history_per_room;
+}
+
+// --- Initialization ---
+
+/// Create a new conversation manager with memory integration.
+fn conversation_manager_new(string system_prompt, int max_history) -> ConversationManager {
+    var mem = memory_open("conversations");
+
+    return ConversationManager {
+        rooms: {},
+        system_prompt: system_prompt,
+        memory_handle: mem,
+        max_history_per_room: max_history
+    };
+}
+
+// --- Room Context Management ---
+
+/// Get or create the conversation context for a room.
+fn conversation_get_room(ConversationManager mgr, string room_id) -> RoomConversation {
+    if mgr.rooms.contains_key(room_id) {
+        return mgr.rooms[room_id];
+    }
+
+    var room = RoomConversation {
+        room_id: room_id,
+        history: [],
+        max_history: mgr.max_history_per_room
+    };
+
+    mgr.rooms[room_id] = room;
+    return room;
+}
+
+/// Add a message to a room's conversation history.
+fn conversation_add_message(ConversationManager mgr, string room_id, string role, string content) {
+    var room = conversation_get_room(mgr, room_id);
+
+    room.history.push(ConversationEntry {
+        role: role,
+        content: content,
+        timestamp: time_millis()
+    });
+
+    // Trim to max history (sliding window)
+    while room.history.len() > room.max_history {
+        // Remove oldest entry by rebuilding without first element
+        var trimmed = ConversationEntry[];
+        for i in 1..room.history.len() {
+            trimmed.push(room.history[i]);
+        }
+        room.history = trimmed;
+    }
+
+    mgr.rooms[room_id] = room;
+
+    // Store in episodic memory for long-term recall
+    memory_store(mgr.memory_handle, $"{role}: {content}", {
+        "room_id": room_id,
+        "role": role
+    });
+}
+
+/// Build message pairs array from room history (for LLM providers).
+/// Returns alternating ["role", "content", "role", "content", ...] array.
+fn conversation_to_message_pairs(ConversationManager mgr, string room_id) -> string[] {
+    var room = conversation_get_room(mgr, room_id);
+    var pairs = string[];
+
+    for entry in room.history {
+        pairs.push(entry.role);
+        pairs.push(entry.content);
+    }
+
+    return pairs;
+}
+
+/// Recall relevant past conversations using episodic memory.
+/// Returns a formatted string of relevant past exchanges.
+fn conversation_recall(ConversationManager mgr, string query, int top_k) -> string {
+    var episodes = memory_recall(mgr.memory_handle, query, top_k);
+    if episodes.len() == 0 {
+        return "";
+    }
+
+    var result = "Relevant past conversations:\n";
+    for episode in episodes {
+        result = $"{result}- {episode}\n";
+    }
+    return result;
+}
+
+/// Clear the conversation history for a room (keeps episodic memory).
+fn conversation_clear_room(ConversationManager mgr, string room_id) {
+    mgr.rooms[room_id] = RoomConversation {
+        room_id: room_id,
+        history: [],
+        max_history: mgr.max_history_per_room
+    };
+}
+
+/// Get the system prompt.
+fn conversation_system_prompt(ConversationManager mgr) -> string {
+    return mgr.system_prompt;
+}

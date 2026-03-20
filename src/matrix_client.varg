@@ -1,0 +1,296 @@
+/// Matrix Client-Server API v3 wrapper for Varg.
+/// Provides login, sync, messaging, room management via HTTP.
+///
+/// All functions are stateless and use Varg's native http_request.
+
+// --- Data Structures ---
+
+struct MatrixConfig {
+    string homeserver_url;
+    string access_token;
+    string user_id;
+    string device_id;
+}
+
+struct MatrixEvent {
+    string event_type;
+    string room_id;
+    string sender;
+    string body;
+    string event_id;
+    string msgtype;
+}
+
+struct SyncResult {
+    string next_batch;
+    MatrixEvent[] events;
+    string[] invited_rooms;
+}
+
+// --- Helpers ---
+
+/// Build authorization headers for Matrix API calls.
+fn matrix_headers(string access_token) -> map<string, string> {
+    return {
+        "Authorization": $"Bearer {access_token}",
+        "Content-Type": "application/json"
+    };
+}
+
+/// Generate a unique transaction ID for idempotent sends.
+fn matrix_txn_id() -> string {
+    var ts = time_millis();
+    return $"varg_{ts}";
+}
+
+/// Escape a string for use in JSON values.
+fn json_escape_str(string s) -> string {
+    var result = s.replace("\\", "\\\\");
+    result = result.replace("\"", "\\\"");
+    result = result.replace("\n", "\\n");
+    result = result.replace("\r", "\\r");
+    result = result.replace("\t", "\\t");
+    return result;
+}
+
+// --- Authentication ---
+
+/// Login to a Matrix homeserver with username/password.
+/// Returns a MatrixConfig with access_token, user_id, device_id.
+fn matrix_login(string homeserver, string username, string password, NetworkAccess net) -> MatrixConfig {
+    var url = $"{homeserver}/_matrix/client/v3/login";
+    var body = $"{{\"type\": \"m.login.password\", \"user\": \"{username}\", \"password\": \"{json_escape_str(password)}\", \"initial_device_display_name\": \"Varg Agent\"}}";
+    var headers = {"Content-Type": "application/json"};
+
+    var resp = http_request(url, "POST", headers, body)?;
+    var parsed = json_parse(resp);
+    var resp_body = json_get(parsed, "body");
+    var body_parsed = json_parse(resp_body);
+
+    var access_token = json_get(body_parsed, "access_token");
+    var user_id = json_get(body_parsed, "user_id");
+    var device_id = json_get(body_parsed, "device_id");
+
+    log_info($"Logged in as {user_id} on {homeserver}");
+
+    return MatrixConfig {
+        homeserver_url: homeserver,
+        access_token: access_token,
+        user_id: user_id,
+        device_id: device_id
+    };
+}
+
+/// Register a new account on the homeserver (when registration is open).
+fn matrix_register(string homeserver, string username, string password, NetworkAccess net) -> MatrixConfig {
+    var url = $"{homeserver}/_matrix/client/v3/register";
+    var body = $"{{\"username\": \"{username}\", \"password\": \"{json_escape_str(password)}\", \"auth\": {{\"type\": \"m.login.dummy\"}}, \"initial_device_display_name\": \"Varg Agent\"}}";
+    var headers = {"Content-Type": "application/json"};
+
+    var resp = http_request(url, "POST", headers, body)?;
+    var parsed = json_parse(resp);
+    var resp_body = json_get(parsed, "body");
+    var body_parsed = json_parse(resp_body);
+
+    var access_token = json_get(body_parsed, "access_token");
+    var user_id = json_get(body_parsed, "user_id");
+    var device_id = json_get(body_parsed, "device_id");
+
+    log_info($"Registered as {user_id}");
+
+    return MatrixConfig {
+        homeserver_url: homeserver,
+        access_token: access_token,
+        user_id: user_id,
+        device_id: device_id
+    };
+}
+
+// --- Sync ---
+
+/// Long-poll the Matrix server for new events.
+/// Pass empty string for since_token on the first call.
+/// timeout is in milliseconds (30000 recommended).
+fn matrix_sync(MatrixConfig config, string since_token, int timeout, NetworkAccess net) -> string {
+    var url = $"{config.homeserver_url}/_matrix/client/v3/sync?timeout={timeout}";
+    if since_token != "" {
+        url = $"{url}&since={since_token}";
+    }
+
+    var headers = matrix_headers(config.access_token);
+    var resp = http_request(url, "GET", headers, "")?;
+    var parsed = json_parse(resp);
+    var resp_body = json_get(parsed, "body");
+    return resp_body;
+}
+
+/// Parse a sync response into a SyncResult with events and invited rooms.
+fn parse_sync_response(string sync_json, string my_user_id) -> SyncResult {
+    var parsed = json_parse(sync_json);
+    var next_batch = json_get(parsed, "next_batch");
+
+    var events = MatrixEvent[];
+    var invited_rooms = string[];
+
+    // Extract joined room events
+    var rooms = json_get(parsed, "rooms");
+    if rooms != "" {
+        var rooms_parsed = json_parse(rooms);
+        var join = json_get(rooms_parsed, "join");
+        if join != "" {
+            var join_parsed = json_parse(join);
+            var room_ids = join_parsed.keys();
+            for room_id in room_ids {
+                var room_data = json_get(join_parsed, room_id);
+                var room_parsed = json_parse(room_data);
+                var timeline = json_get(room_parsed, "timeline");
+                if timeline != "" {
+                    var tl_parsed = json_parse(timeline);
+                    var tl_events = json_get_array(tl_parsed, "events");
+                    for evt_str in tl_events {
+                        var evt = json_parse(evt_str);
+                        var event_type = json_get(evt, "type");
+                        var sender = json_get(evt, "sender");
+                        var event_id = json_get(evt, "event_id");
+
+                        var content = json_get(evt, "content");
+                        var content_parsed = json_parse(content);
+                        var body = json_get(content_parsed, "body");
+                        var msgtype = json_get(content_parsed, "msgtype");
+
+                        // Skip our own messages
+                        if sender != my_user_id {
+                            events.push(MatrixEvent {
+                                event_type: event_type,
+                                room_id: room_id,
+                                sender: sender,
+                                body: body,
+                                event_id: event_id,
+                                msgtype: msgtype
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Extract invited rooms
+        var invite = json_get(rooms_parsed, "invite");
+        if invite != "" {
+            var invite_parsed = json_parse(invite);
+            var invite_room_ids = invite_parsed.keys();
+            for room_id in invite_room_ids {
+                invited_rooms.push(room_id);
+            }
+        }
+    }
+
+    return SyncResult {
+        next_batch: next_batch,
+        events: events,
+        invited_rooms: invited_rooms
+    };
+}
+
+// --- Messaging ---
+
+/// Send a plain text message to a room.
+fn matrix_send_message(MatrixConfig config, string room_id, string body, NetworkAccess net) -> string {
+    var txn_id = matrix_txn_id();
+    var url = $"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}";
+    var headers = matrix_headers(config.access_token);
+    var escaped_body = json_escape_str(body);
+    var req_body = $"{{\"msgtype\": \"m.text\", \"body\": \"{escaped_body}\"}}";
+
+    var resp = http_request(url, "PUT", headers, req_body)?;
+    var parsed = json_parse(resp);
+    var resp_body = json_get(parsed, "body");
+    var body_parsed = json_parse(resp_body);
+    var event_id = json_get(body_parsed, "event_id");
+
+    return event_id;
+}
+
+/// Send a formatted message (plain + HTML) to a room.
+fn matrix_send_formatted(MatrixConfig config, string room_id, string plain, string html, NetworkAccess net) -> string {
+    var txn_id = matrix_txn_id();
+    var url = $"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}";
+    var headers = matrix_headers(config.access_token);
+    var escaped_plain = json_escape_str(plain);
+    var escaped_html = json_escape_str(html);
+    var req_body = $"{{\"msgtype\": \"m.text\", \"body\": \"{escaped_plain}\", \"format\": \"org.matrix.custom.html\", \"formatted_body\": \"{escaped_html}\"}}";
+
+    var resp = http_request(url, "PUT", headers, req_body)?;
+    var parsed = json_parse(resp);
+    var resp_body = json_get(parsed, "body");
+    var body_parsed = json_parse(resp_body);
+    var event_id = json_get(body_parsed, "event_id");
+
+    return event_id;
+}
+
+/// Send a typing indicator to a room.
+fn matrix_send_typing(MatrixConfig config, string room_id, bool typing, int timeout, NetworkAccess net) {
+    var url = $"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/typing/{config.user_id}";
+    var headers = matrix_headers(config.access_token);
+    var req_body = $"{{\"typing\": {typing}, \"timeout\": {timeout}}}";
+
+    http_request(url, "PUT", headers, req_body)?;
+}
+
+// --- Room Management ---
+
+/// Join a room by ID or alias.
+fn matrix_join_room(MatrixConfig config, string room_id_or_alias, NetworkAccess net) -> string {
+    var url = $"{config.homeserver_url}/_matrix/client/v3/join/{room_id_or_alias}";
+    var headers = matrix_headers(config.access_token);
+
+    var resp = http_request(url, "POST", headers, "{}")?;
+    var parsed = json_parse(resp);
+    var resp_body = json_get(parsed, "body");
+    var body_parsed = json_parse(resp_body);
+    var joined_room_id = json_get(body_parsed, "room_id");
+
+    log_info($"Joined room: {joined_room_id}");
+    return joined_room_id;
+}
+
+/// Create a new room.
+fn matrix_create_room(MatrixConfig config, string name, bool is_public, NetworkAccess net) -> string {
+    var url = $"{config.homeserver_url}/_matrix/client/v3/createRoom";
+    var headers = matrix_headers(config.access_token);
+    var visibility = "private";
+    if is_public {
+        visibility = "public";
+    }
+    var req_body = $"{{\"name\": \"{json_escape_str(name)}\", \"visibility\": \"{visibility}\", \"preset\": \"public_chat\"}}";
+
+    var resp = http_request(url, "POST", headers, req_body)?;
+    var parsed = json_parse(resp);
+    var resp_body = json_get(parsed, "body");
+    var body_parsed = json_parse(resp_body);
+    var room_id = json_get(body_parsed, "room_id");
+
+    log_info($"Created room '{name}': {room_id}");
+    return room_id;
+}
+
+/// Invite a user to a room.
+fn matrix_invite(MatrixConfig config, string room_id, string user_id, NetworkAccess net) {
+    var url = $"{config.homeserver_url}/_matrix/client/v3/rooms/{room_id}/invite";
+    var headers = matrix_headers(config.access_token);
+    var req_body = $"{{\"user_id\": \"{user_id}\"}}";
+
+    http_request(url, "POST", headers, req_body)?;
+    log_info($"Invited {user_id} to {room_id}");
+}
+
+/// Set the display name for the agent.
+fn matrix_set_display_name(MatrixConfig config, string display_name, NetworkAccess net) {
+    var url = $"{config.homeserver_url}/_matrix/client/v3/profile/{config.user_id}/displayname";
+    var headers = matrix_headers(config.access_token);
+    var req_body = $"{{\"displayname\": \"{json_escape_str(display_name)}\"}}";
+
+    http_request(url, "PUT", headers, req_body)?;
+    log_info($"Display name set to: {display_name}");
+}

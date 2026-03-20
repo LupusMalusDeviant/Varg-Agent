@@ -1,0 +1,27 @@
+# Build artifacts
+.vargc_cache/
+target/
+*.exe
+tmp_*.varg
+
+# Environment and secrets
+.env
+deploy/.env
+*.key
+*.pem
+
+# Data volumes (persisted via Docker volumes)
+data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/

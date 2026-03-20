@@ -1,0 +1,142 @@
+/// File management tools for the agent.
+/// Provides read, write, list, and search capabilities.
+
+/// Read the contents of a file.
+@[McpTool("read_file", "Read the contents of a file")]
+fn tool_read_file(map<string, string> args, FileAccess fs) -> string {
+    var path = args["path"] or "";
+
+    if path == "" {
+        return "Error: path is required";
+    }
+
+    try {
+        var content = fs_read(path)?;
+        return content;
+    } catch err {
+        return $"Error reading {path}: {err}";
+    }
+}
+
+/// Write content to a file (creates or overwrites).
+@[McpTool("write_file", "Write content to a file")]
+fn tool_write_file(map<string, string> args, FileAccess fs) -> string {
+    var path = args["path"] or "";
+    var content = args["content"] or "";
+
+    if path == "" {
+        return "Error: path is required";
+    }
+
+    try {
+        fs_write(path, content)?;
+        return $"Written {content.len()} bytes to {path}";
+    } catch err {
+        return $"Error writing {path}: {err}";
+    }
+}
+
+/// Append content to a file.
+@[McpTool("append_file", "Append content to the end of a file")]
+fn tool_append_file(map<string, string> args, FileAccess fs) -> string {
+    var path = args["path"] or "";
+    var content = args["content"] or "";
+
+    if path == "" {
+        return "Error: path is required";
+    }
+
+    try {
+        fs_append(path, content)?;
+        return $"Appended {content.len()} bytes to {path}";
+    } catch err {
+        return $"Error appending to {path}: {err}";
+    }
+}
+
+/// List the contents of a directory.
+@[McpTool("list_directory", "List files and directories in a path")]
+fn tool_list_directory(map<string, string> args, FileAccess fs) -> string {
+    var path = args["path"] or ".";
+
+    try {
+        var entries = fs_read_dir(path)?;
+
+        if entries.len() == 0 {
+            return $"Directory '{path}' is empty.";
+        }
+
+        var result = $"Contents of {path}:\n";
+        for entry in entries {
+            result = $"{result}  {entry}\n";
+        }
+        return result;
+    } catch err {
+        return $"Error listing {path}: {err}";
+    }
+}
+
+/// Check if a file or directory exists.
+@[McpTool("path_exists", "Check if a file or directory exists")]
+fn tool_path_exists(map<string, string> args, FileAccess fs) -> string {
+    var path = args["path"] or "";
+
+    if path == "" {
+        return "Error: path is required";
+    }
+
+    var exists = path_exists(path);
+    if exists {
+        return $"'{path}' exists.";
+    } else {
+        return $"'{path}' does not exist.";
+    }
+}
+
+/// Create a directory (including parent directories).
+@[McpTool("create_directory", "Create a directory")]
+fn tool_create_directory(map<string, string> args, FileAccess fs) -> string {
+    var path = args["path"] or "";
+
+    if path == "" {
+        return "Error: path is required";
+    }
+
+    try {
+        create_dir(path)?;
+        return $"Directory '{path}' created.";
+    } catch err {
+        return $"Error creating directory {path}: {err}";
+    }
+}
+
+/// Register all file tools with the tool registry.
+fn register_file_tools(ToolRegistry registry) {
+    tool_register(registry, "read_file", "Read the contents of a file", [
+        tool_param("path", "string", "Path to the file", true)
+    ]);
+
+    tool_register(registry, "write_file", "Write content to a file (creates or overwrites)", [
+        tool_param("path", "string", "Path to the file", true),
+        tool_param("content", "string", "Content to write", true)
+    ]);
+
+    tool_register(registry, "append_file", "Append content to the end of a file", [
+        tool_param("path", "string", "Path to the file", true),
+        tool_param("content", "string", "Content to append", true)
+    ]);
+
+    tool_register(registry, "list_directory", "List files and directories in a path", [
+        tool_param("path", "string", "Directory path (default: current directory)", false)
+    ]);
+
+    tool_register(registry, "path_exists", "Check if a file or directory exists", [
+        tool_param("path", "string", "Path to check", true)
+    ]);
+
+    tool_register(registry, "create_directory", "Create a directory", [
+        tool_param("path", "string", "Directory path to create", true)
+    ]);
+
+    log_info("File tools registered");
+}

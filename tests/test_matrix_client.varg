@@ -1,0 +1,144 @@
+/// Tests for the Matrix client library.
+/// Run: vargc test tests/test_matrix_client.varg
+
+agent MatrixClientTests {
+
+    @[Test]
+    public void test_matrix_headers() {
+        var headers = matrix_headers("my_token_123");
+        assert_eq(headers["Authorization"], "Bearer my_token_123");
+        assert_eq(headers["Content-Type"], "application/json");
+    }
+
+    @[Test]
+    public void test_matrix_txn_id_unique() {
+        var id1 = matrix_txn_id();
+        sleep(2);
+        var id2 = matrix_txn_id();
+        assert_true(id1 != id2, "Transaction IDs should be unique");
+        assert_true(id1.starts_with("varg_"), "Should start with varg_ prefix");
+    }
+
+    @[Test]
+    public void test_json_escape_str() {
+        var escaped = json_escape_str("hello \"world\"");
+        assert_contains(escaped, "\\\"");
+
+        var newlines = json_escape_str("line1\nline2");
+        assert_contains(newlines, "\\n");
+
+        var clean = json_escape_str("no special chars");
+        assert_eq(clean, "no special chars");
+    }
+
+    @[Test]
+    public void test_parse_sync_response_empty() {
+        var sync_json = "{\"next_batch\": \"s123_456\", \"rooms\": {}}";
+        var result = parse_sync_response(sync_json, "@bot:localhost");
+
+        assert_eq(result.next_batch, "s123_456");
+        assert_eq(result.events.len(), 0);
+        assert_eq(result.invited_rooms.len(), 0);
+    }
+
+    @[Test]
+    public void test_parse_sync_response_with_message() {
+        var sync_json = """
+        {
+            "next_batch": "s200",
+            "rooms": {
+                "join": {
+                    "!room1:localhost": {
+                        "timeline": {
+                            "events": [
+                                {
+                                    "type": "m.room.message",
+                                    "sender": "@user:localhost",
+                                    "event_id": "$evt1",
+                                    "content": {
+                                        "msgtype": "m.text",
+                                        "body": "Hello agent!"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+        """;
+
+        var result = parse_sync_response(sync_json, "@bot:localhost");
+        assert_eq(result.next_batch, "s200");
+        assert_eq(result.events.len(), 1);
+        assert_eq(result.events[0].sender, "@user:localhost");
+        assert_eq(result.events[0].body, "Hello agent!");
+        assert_eq(result.events[0].room_id, "!room1:localhost");
+    }
+
+    @[Test]
+    public void test_parse_sync_filters_own_messages() {
+        var sync_json = """
+        {
+            "next_batch": "s300",
+            "rooms": {
+                "join": {
+                    "!room1:localhost": {
+                        "timeline": {
+                            "events": [
+                                {
+                                    "type": "m.room.message",
+                                    "sender": "@bot:localhost",
+                                    "event_id": "$evt_self",
+                                    "content": {
+                                        "msgtype": "m.text",
+                                        "body": "My own message"
+                                    }
+                                },
+                                {
+                                    "type": "m.room.message",
+                                    "sender": "@user:localhost",
+                                    "event_id": "$evt_user",
+                                    "content": {
+                                        "msgtype": "m.text",
+                                        "body": "User message"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+        """;
+
+        var result = parse_sync_response(sync_json, "@bot:localhost");
+        assert_eq(result.events.len(), 1, "Should filter own messages");
+        assert_eq(result.events[0].sender, "@user:localhost");
+    }
+
+    @[Test]
+    public void test_parse_sync_with_invite() {
+        var sync_json = """
+        {
+            "next_batch": "s400",
+            "rooms": {
+                "join": {},
+                "invite": {
+                    "!newroom:localhost": {
+                        "invite_state": {}
+                    }
+                }
+            }
+        }
+        """;
+
+        var result = parse_sync_response(sync_json, "@bot:localhost");
+        assert_eq(result.invited_rooms.len(), 1);
+        assert_eq(result.invited_rooms[0], "!newroom:localhost");
+    }
+
+    public void Run() {
+        print "Matrix client tests - use: vargc test tests/test_matrix_client.varg";
+    }
+}

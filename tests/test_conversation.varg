@@ -1,0 +1,105 @@
+/// Tests for the conversation manager.
+/// Run: vargc test tests/test_conversation.varg
+
+agent ConversationTests {
+
+    @[Test]
+    public void test_conversation_manager_new() {
+        var mgr = conversation_manager_new("You are helpful.", 10);
+        assert_eq(mgr.system_prompt, "You are helpful.");
+        assert_eq(mgr.max_history_per_room, 10);
+    }
+
+    @[Test]
+    public void test_conversation_get_room_creates_new() {
+        var mgr = conversation_manager_new("test", 10);
+        var room = conversation_get_room(mgr, "!room1:localhost");
+
+        assert_eq(room.room_id, "!room1:localhost");
+        assert_eq(room.history.len(), 0);
+        assert_eq(room.max_history, 10);
+    }
+
+    @[Test]
+    public void test_conversation_add_message() {
+        var mgr = conversation_manager_new("test", 10);
+
+        conversation_add_message(mgr, "!room1:localhost", "user", "Hello");
+        conversation_add_message(mgr, "!room1:localhost", "assistant", "Hi there!");
+
+        var room = conversation_get_room(mgr, "!room1:localhost");
+        assert_eq(room.history.len(), 2);
+        assert_eq(room.history[0].role, "user");
+        assert_eq(room.history[0].content, "Hello");
+        assert_eq(room.history[1].role, "assistant");
+    }
+
+    @[Test]
+    public void test_conversation_sliding_window() {
+        var mgr = conversation_manager_new("test", 3);
+
+        conversation_add_message(mgr, "!room:localhost", "user", "msg1");
+        conversation_add_message(mgr, "!room:localhost", "assistant", "reply1");
+        conversation_add_message(mgr, "!room:localhost", "user", "msg2");
+        conversation_add_message(mgr, "!room:localhost", "assistant", "reply2");
+
+        var room = conversation_get_room(mgr, "!room:localhost");
+        assert_eq(room.history.len(), 3, "Should trim to max_history");
+        // Oldest message should be gone
+        assert_eq(room.history[0].content, "reply1");
+    }
+
+    @[Test]
+    public void test_conversation_to_message_pairs() {
+        var mgr = conversation_manager_new("test", 10);
+
+        conversation_add_message(mgr, "!room:localhost", "user", "Hello");
+        conversation_add_message(mgr, "!room:localhost", "assistant", "Hi!");
+
+        var pairs = conversation_to_message_pairs(mgr, "!room:localhost");
+        assert_eq(pairs.len(), 4);
+        assert_eq(pairs[0], "user");
+        assert_eq(pairs[1], "Hello");
+        assert_eq(pairs[2], "assistant");
+        assert_eq(pairs[3], "Hi!");
+    }
+
+    @[Test]
+    public void test_conversation_separate_rooms() {
+        var mgr = conversation_manager_new("test", 10);
+
+        conversation_add_message(mgr, "!room1:localhost", "user", "Room 1 msg");
+        conversation_add_message(mgr, "!room2:localhost", "user", "Room 2 msg");
+
+        var room1 = conversation_get_room(mgr, "!room1:localhost");
+        var room2 = conversation_get_room(mgr, "!room2:localhost");
+
+        assert_eq(room1.history.len(), 1);
+        assert_eq(room2.history.len(), 1);
+        assert_eq(room1.history[0].content, "Room 1 msg");
+        assert_eq(room2.history[0].content, "Room 2 msg");
+    }
+
+    @[Test]
+    public void test_conversation_clear_room() {
+        var mgr = conversation_manager_new("test", 10);
+
+        conversation_add_message(mgr, "!room:localhost", "user", "Hello");
+        conversation_add_message(mgr, "!room:localhost", "assistant", "Hi!");
+
+        conversation_clear_room(mgr, "!room:localhost");
+
+        var room = conversation_get_room(mgr, "!room:localhost");
+        assert_eq(room.history.len(), 0);
+    }
+
+    @[Test]
+    public void test_conversation_system_prompt() {
+        var mgr = conversation_manager_new("Be concise.", 10);
+        assert_eq(conversation_system_prompt(mgr), "Be concise.");
+    }
+
+    public void Run() {
+        print "Conversation tests - use: vargc test tests/test_conversation.varg";
+    }
+}

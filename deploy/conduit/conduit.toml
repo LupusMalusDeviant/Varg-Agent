@@ -1,0 +1,25 @@
+# Conduit Matrix Homeserver Configuration
+# This file is optional - environment variables in docker-compose.yml take precedence.
+# Use this for fine-tuning beyond what env vars provide.
+
+[global]
+# The server name (domain or IP) - set via CONDUIT_SERVER_NAME env var
+# server_name = "localhost"
+
+# Database backend: "rocksdb" (recommended) or "sqlite"
+# database_backend = "rocksdb"
+
+# Listen port (internal, Caddy proxies external traffic)
+# port = 6167
+
+# Maximum request body size (20 MB)
+# max_request_size = 20000000
+
+# Allow open registration (set to false after initial setup)
+# allow_registration = true
+
+# Federation (set to true when you have a domain + DNS configured)
+# allow_federation = false
+
+# Trusted servers for federation key exchange
+# trusted_servers = ["matrix.org"]

@@ -1,0 +1,76 @@
+/// Tests for the knowledge manager (Graph-RAG).
+/// Run: vargc test tests/test_knowledge.varg
+
+agent KnowledgeTests {
+
+    @[Test]
+    public void test_knowledge_init() {
+        var km = knowledge_new("test_kb");
+        assert_eq(km.fact_count, 0);
+
+        var stats = knowledge_stats(km);
+        assert_contains(stats, "0 facts added");
+    }
+
+    @[Test]
+    public void test_knowledge_add_triple() {
+        var km = knowledge_new("test_triples");
+
+        knowledge_add(km, "Varg", "is_written_in", "Rust", {});
+        assert_eq(km.fact_count, 1);
+
+        knowledge_add(km, "Varg", "compiles_to", "native binary", {});
+        assert_eq(km.fact_count, 2);
+    }
+
+    @[Test]
+    public void test_knowledge_add_text() {
+        var km = knowledge_new("test_text");
+
+        knowledge_add_text(km, "Varg is a compiled programming language for AI agents", {"source": "docs"});
+        assert_eq(km.fact_count, 1);
+
+        var stats = knowledge_stats(km);
+        assert_contains(stats, "1 facts added");
+    }
+
+    @[Test]
+    public void test_knowledge_search() {
+        var km = knowledge_new("test_search");
+
+        knowledge_add_text(km, "Rust is a systems programming language", {});
+        knowledge_add_text(km, "Python is an interpreted language", {});
+        knowledge_add_text(km, "Varg compiles to Rust native binaries", {});
+
+        var results = knowledge_search(km, "Rust programming", 2);
+        assert_true(results.len() > 0, "Should find relevant results");
+    }
+
+    @[Test]
+    public void test_knowledge_graph_entities() {
+        var km = knowledge_new("test_entities");
+
+        knowledge_add(km, "Alice", "works_on", "Varg", {});
+        knowledge_add(km, "Bob", "works_on", "Varg", {});
+
+        var entities = knowledge_query_entities(km, "Entity");
+        assert_true(entities.len() > 0, "Should have entities");
+    }
+
+    @[Test]
+    public void test_knowledge_graph_rag() {
+        var km = knowledge_new("test_rag");
+
+        knowledge_add(km, "Varg", "is_a", "programming language", {});
+        knowledge_add(km, "Varg", "targets", "AI agents", {});
+        knowledge_add_text(km, "Varg uses an actor model with agents as the primary construct", {});
+
+        var context = knowledge_graph_rag(km, "What is Varg?", 3);
+        assert_true(context != "", "Graph-RAG should return context");
+        assert_contains(context, "Relevant knowledge");
+    }
+
+    public void Run() {
+        print "Knowledge tests - use: vargc test tests/test_knowledge.varg";
+    }
+}

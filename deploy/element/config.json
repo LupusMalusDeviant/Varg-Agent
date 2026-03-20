@@ -1,0 +1,21 @@
+{
+    "default_server_config": {
+        "m.homeserver": {
+            "base_url": "HOMESERVER_URL_PLACEHOLDER",
+            "server_name": "SERVER_NAME_PLACEHOLDER"
+        }
+    },
+    "brand": "Varg Agent Chat",
+    "default_country_code": "DE",
+    "show_labs_settings": false,
+    "default_theme": "dark",
+    "room_directory": {
+        "servers": []
+    },
+    "enable_presence_by_hs_url": {
+        "HOMESERVER_URL_PLACEHOLDER": true
+    },
+    "setting_defaults": {
+        "breadcrumbs": true
+    }
+}

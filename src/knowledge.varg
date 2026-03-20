@@ -1,0 +1,175 @@
+/// Knowledge Manager - Graph-RAG implementation.
+/// Combines knowledge graph (structured) with vector store (semantic)
+/// for augmented retrieval.
+
+// --- Data Structures ---
+
+struct KnowledgeManager {
+    string graph_handle;
+    string vector_handle;
+    int fact_count;
+}
+
+struct KnowledgeTriple {
+    string subject;
+    string predicate;
+    string object;
+}
+
+struct KnowledgeResult {
+    string content;
+    float relevance;
+}
+
+// --- Initialization ---
+
+/// Create a new knowledge manager with graph and vector store.
+fn knowledge_new(string name) -> KnowledgeManager {
+    var g = graph_open($"{name}_graph");
+    var v = vector_store_open($"{name}_vectors");
+
+    log_info($"Knowledge manager '{name}' initialized");
+
+    return KnowledgeManager {
+        graph_handle: g,
+        vector_handle: v,
+        fact_count: 0
+    };
+}
+
+// --- Knowledge Storage ---
+
+/// Add a knowledge triple (subject --predicate--> object).
+/// Stores both as a graph edge AND as a vector embedding for semantic search.
+fn knowledge_add(KnowledgeManager km, string subject, string predicate, string object, map<string, string> metadata) {
+    // Add to knowledge graph
+    var subj_node = graph_add_node(km.graph_handle, "Entity", {
+        "name": subject,
+        "type": "subject"
+    });
+    var obj_node = graph_add_node(km.graph_handle, "Entity", {
+        "name": object,
+        "type": "object"
+    });
+    graph_add_edge(km.graph_handle, subj_node, predicate, obj_node, metadata);
+
+    // Create natural language statement and embed it
+    var statement = $"{subject} {predicate} {object}";
+    var embedding = embed(statement);
+    var doc_id = $"fact_{km.fact_count}";
+
+    var doc_meta = {
+        "subject": subject,
+        "predicate": predicate,
+        "object": object,
+        "statement": statement
+    };
+    // Merge additional metadata
+    for (key, value) in metadata {
+        doc_meta[key] = value;
+    }
+
+    vector_store_upsert(km.vector_handle, doc_id, embedding, doc_meta);
+    km.fact_count = km.fact_count + 1;
+
+    log_debug($"Knowledge added: {statement}");
+}
+
+/// Add a raw text chunk to the vector store (for unstructured knowledge).
+fn knowledge_add_text(KnowledgeManager km, string text, map<string, string> metadata) {
+    var embedding = embed(text);
+    var doc_id = $"text_{km.fact_count}";
+
+    metadata["text"] = text;
+    vector_store_upsert(km.vector_handle, doc_id, embedding, metadata);
+    km.fact_count = km.fact_count + 1;
+
+    log_debug($"Text knowledge added: {text.substring(0, 50)}...");
+}
+
+// --- Semantic Search ---
+
+/// Search knowledge by semantic similarity.
+/// Returns the top_k most relevant knowledge entries.
+fn knowledge_search(KnowledgeManager km, string query, int top_k) -> string[] {
+    var query_embedding = embed(query);
+    var results = vector_store_search(km.vector_handle, query_embedding, top_k);
+
+    var output = string[];
+    for result in results {
+        output.push(result);
+    }
+
+    return output;
+}
+
+// --- Graph Queries ---
+
+/// Query all entities with a given label.
+fn knowledge_query_entities(KnowledgeManager km, string label) -> string[] {
+    var nodes = graph_query(km.graph_handle, label);
+    var output = string[];
+    for node in nodes {
+        output.push(node);
+    }
+    return output;
+}
+
+/// Traverse the knowledge graph from a starting node.
+fn knowledge_traverse(KnowledgeManager km, string start_node_id, int depth, string relation) -> string[] {
+    var results = graph_traverse(km.graph_handle, start_node_id, depth, relation);
+    var output = string[];
+    for result in results {
+        output.push(result);
+    }
+    return output;
+}
+
+/// Get neighbors of a node in the knowledge graph.
+fn knowledge_neighbors(KnowledgeManager km, string node_id) -> string[] {
+    var results = graph_neighbors(km.graph_handle, node_id);
+    var output = string[];
+    for result in results {
+        output.push(result);
+    }
+    return output;
+}
+
+// --- Graph-RAG: Combined Retrieval ---
+
+/// The core Graph-RAG function:
+/// 1. Semantic search to find relevant entry points
+/// 2. Graph traversal from those entry points to find connected knowledge
+/// 3. Combine and format as context string for LLM
+fn knowledge_graph_rag(KnowledgeManager km, string query, int top_k) -> string {
+    // Step 1: Semantic search for relevant facts
+    var semantic_results = knowledge_search(km, query, top_k);
+
+    if semantic_results.len() == 0 {
+        return "";
+    }
+
+    var context = "Relevant knowledge:\n";
+
+    // Step 2: Add semantic search results
+    for result in semantic_results {
+        context = $"{context}- {result}\n";
+    }
+
+    // Step 3: Graph traversal for connected knowledge
+    // Query entities that match the search to find related facts
+    var entities = knowledge_query_entities(km, "Entity");
+    if entities.len() > 0 {
+        context = $"{context}\nRelated entities found: {entities.len()}\n";
+    }
+
+    return context;
+}
+
+/// Get statistics about the knowledge store.
+fn knowledge_stats(KnowledgeManager km) -> string {
+    var vec_count = vector_store_count(km.vector_handle);
+    var entity_count = knowledge_query_entities(km, "Entity").len();
+
+    return $"Knowledge store: {vec_count} vectors, {entity_count} entities, {km.fact_count} facts added";
+}
