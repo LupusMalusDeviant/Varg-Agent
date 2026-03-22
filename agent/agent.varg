@@ -1,0 +1,2269 @@
+// =============================================================================
+// Varg Matrix Chat Agent - v11 "Multi-Soul"
+// Features: Multi-Soul System (per-room personality binding), Knowledge-Graph-Driven
+//           Tool Discovery, Self-Knowledge, Self-Extending Tools, Multi-Room,
+//           Graph-RAG, Embeddings, STT, Sandbox, Git Clone, Permanent Memory
+// Constraints: $"..." for borrows, ? only in void fns, env vars for special chars
+// =============================================================================
+
+struct Config {
+    public string homeserver;
+    public string username;
+    public string password;
+    public string display_name;
+    public string llm_provider;
+    public string llm_model;
+    public string gemini_key;
+    public string openai_key;
+    public string anthropic_key;
+    public string ollama_url;
+    public string sys_prompt;
+    public string Q;
+    public string L;
+    public string R;
+    public string NL;
+    public string CR;
+    public string TAB;
+}
+
+struct Session {
+    public string access_token;
+    public string user_id;
+    public string next_batch;
+}
+
+// ===== JSON Helpers =====
+
+fn json_escape_with(string s, string nl, string cr, string tab) -> string {
+    var r = s;
+    var bs = env("JSON_BS");
+    var q = env("JSON_Q");
+    if bs != "" {
+        var bs2 = $"{bs}{bs}";
+        r = r.replace(bs, bs2);
+    }
+    if q != "" {
+        if bs != "" {
+            var escaped_q = $"{bs}{q}";
+            r = r.replace(q, escaped_q);
+        }
+    }
+    if nl != "" { r = r.replace(nl, "\n"); }
+    if cr != "" { r = r.replace(cr, "\r"); }
+    if tab != "" { r = r.replace(tab, "\t"); }
+    return r;
+}
+
+fn jq(string Q, string s) -> string {
+    return $"{Q}{s}{Q}";
+}
+
+fn jpair(string Q, string key, string val) -> string {
+    return $"{Q}{key}{Q}: {Q}{val}{Q}";
+}
+
+fn jpair_raw(string Q, string key, string raw_val) -> string {
+    return $"{Q}{key}{Q}: {raw_val}";
+}
+
+// ===== File-based Storage =====
+
+fn store_file(string path, string content) {
+    unsafe {
+        file_write(path, content);
+    }
+}
+
+fn load_file(string path) -> string {
+    var content = "";
+    unsafe {
+        content = file_read(path);
+    }
+    if content.contains("os error") {
+        return "";
+    }
+    return content;
+}
+
+// ===== Room Path Helper =====
+
+fn room_file(string room_id, string suffix) -> string {
+    var safe = room_id.replace("!", "r_");
+    safe = safe.replace(":", "_");
+    safe = safe.replace(".", "_");
+    return $"/app/data/room_{safe}_{suffix}.txt";
+}
+
+// ===== Per-Room History =====
+
+fn load_room_history(string room_id) -> string {
+    var path = room_file(room_id, "history");
+    return load_file(path);
+}
+
+fn save_room_history(string room_id, string h) {
+    var path = room_file(room_id, "history");
+    store_file(path, h);
+}
+
+// ===== Per-Room Knowledge =====
+
+fn kb_store_room(string room_id, string key, string value) {
+    var path = room_file(room_id, $"kb_{key}");
+    store_file(path, value);
+}
+
+fn kb_recall_room(string room_id, string key) -> string {
+    var path = room_file(room_id, $"kb_{key}");
+    return load_file(path);
+}
+
+// ===== Memory & Graph Embedding =====
+
+fn store_in_memory(string room_id, string sender, string message) {
+    var safe = room_id.replace("!", "r_").replace(":", "_");
+    var mname = $"conv_{safe}";
+    var handle = memory_open(mname);
+    var content = $"{sender}: {message}";
+    var meta = {"room_id": room_id, "sender": sender};
+    memory_store(handle, content, meta);
+}
+
+fn store_in_graph(string room_id, string sender, string message) {
+    var safe = room_id.replace("!", "r_").replace(":", "_");
+    var gname = $"graph_{safe}";
+    var handle = graph_open(gname);
+    var ts = time_millis();
+    var ts_str = $"{ts}";
+    var props = {"sender": sender, "content": message, "timestamp": ts_str};
+    graph_add_node(handle, "Message", props);
+}
+
+fn store_embedding(string room_id, string sender, string message) {
+    var safe = room_id.replace("!", "r_").replace(":", "_");
+    var vname = $"vec_{safe}";
+    var handle = vector_store_open(vname);
+    var content = $"{sender}: {message}";
+    var emb = embed(content);
+    var ts = time_millis();
+    var doc_id = $"msg_{ts}";
+    var meta = {"sender": sender, "text": message, "room_id": room_id};
+    vector_store_upsert(handle, doc_id, emb, meta);
+}
+
+// ===== Multi-Soul System (Knowledge Graph, per-room binding) =====
+
+// Store a soul entry: each soul has 5 sections (identity, tone, traits, empathy, user_model)
+// Plus system sections (toolformat, kontext, faehigkeiten) shared across all souls
+fn soul_add_entry(string soul_name, string section, string content) {
+    var gh = graph_open("souls");
+    var props = {"soul": soul_name, "section": section, "content": content};
+    graph_add_node(gh, "SoulEntry", props);
+}
+
+// Get active soul for a room (default: "rose")
+fn get_room_soul(string room_id) -> string {
+    var path = room_file(room_id, "soul");
+    var soul = load_file(path);
+    if soul == "" { return "rose"; }
+    return soul;
+}
+
+// Bind a soul to a room
+fn set_room_soul(string room_id, string soul_name) {
+    var path = room_file(room_id, "soul");
+    store_file(path, soul_name);
+}
+
+// Store soul credentials (Matrix username/password per soul)
+fn soul_set_credentials(string soul_name, string username, string password) {
+    var upath = $"/app/data/soul_{soul_name}_username.txt";
+    var ppath = $"/app/data/soul_{soul_name}_password.txt";
+    store_file(upath, username);
+    store_file(ppath, password);
+}
+
+fn soul_get_username(string soul_name) -> string {
+    var path = $"/app/data/soul_{soul_name}_username.txt";
+    return load_file(path);
+}
+
+fn soul_get_display_name(string soul_name) -> string {
+    var gh = graph_open("souls");
+    var nodes = graph_query(gh, "SoulEntry");
+    var count = nodes.len();
+    // Find identity entry for this soul to extract display name
+    if count > 0 { var s = nodes[0]["soul"]; var sec = nodes[0]["section"]; if s == soul_name { if sec == "display_name" { return nodes[0]["content"]; } } }
+    if count > 1 { var s = nodes[1]["soul"]; var sec = nodes[1]["section"]; if s == soul_name { if sec == "display_name" { return nodes[1]["content"]; } } }
+    if count > 2 { var s = nodes[2]["soul"]; var sec = nodes[2]["section"]; if s == soul_name { if sec == "display_name" { return nodes[2]["content"]; } } }
+    if count > 3 { var s = nodes[3]["soul"]; var sec = nodes[3]["section"]; if s == soul_name { if sec == "display_name" { return nodes[3]["content"]; } } }
+    if count > 4 { var s = nodes[4]["soul"]; var sec = nodes[4]["section"]; if s == soul_name { if sec == "display_name" { return nodes[4]["content"]; } } }
+    if count > 5 { var s = nodes[5]["soul"]; var sec = nodes[5]["section"]; if s == soul_name { if sec == "display_name" { return nodes[5]["content"]; } } }
+    if count > 6 { var s = nodes[6]["soul"]; var sec = nodes[6]["section"]; if s == soul_name { if sec == "display_name" { return nodes[6]["content"]; } } }
+    if count > 7 { var s = nodes[7]["soul"]; var sec = nodes[7]["section"]; if s == soul_name { if sec == "display_name" { return nodes[7]["content"]; } } }
+    if count > 8 { var s = nodes[8]["soul"]; var sec = nodes[8]["section"]; if s == soul_name { if sec == "display_name" { return nodes[8]["content"]; } } }
+    if count > 9 { var s = nodes[9]["soul"]; var sec = nodes[9]["section"]; if s == soul_name { if sec == "display_name" { return nodes[9]["content"]; } } }
+    // Fallback
+    return soul_name;
+}
+
+// Register a new soul (creates marker file + empty graph entries)
+fn soul_create(string name) {
+    var marker = $"/app/data/soul_{name}_exists.txt";
+    store_file(marker, "true");
+    // Add display_name entry (default = name)
+    soul_add_entry(name, "display_name", name);
+    log_info($"Soul created: {name}");
+}
+
+// Check if a soul exists
+fn soul_exists(string name) -> bool {
+    var marker = $"/app/data/soul_{name}_exists.txt";
+    var val = load_file(marker);
+    if val == "true" { return true; }
+    return false;
+}
+
+// List all known souls (check marker files for common names + registered)
+fn soul_list_str() -> string {
+    var nl = env("JSON_NL");
+    var result = "";
+    // Check rose (always exists)
+    result = "rose";
+    // Check up to 10 additional souls via registry file
+    var reg = load_file("/app/data/soul_registry.txt");
+    if reg != "" {
+        result = $"{result}{nl}{reg}";
+    }
+    return result;
+}
+
+// Add soul to registry (for listing)
+fn soul_register(string name) {
+    var reg = load_file("/app/data/soul_registry.txt");
+    var nl = env("JSON_NL");
+    if reg == "" {
+        store_file("/app/data/soul_registry.txt", name);
+    } else {
+        // Don't add duplicates
+        if !reg.contains(name) {
+            var updated = $"{reg}{nl}{name}";
+            store_file("/app/data/soul_registry.txt", updated);
+        }
+    }
+}
+
+// ===== Rose Tyler Soul (Default) =====
+
+fn seed_soul_rose() {
+    var exists = soul_exists("rose");
+    if exists { return; }
+
+    soul_create("rose");
+    soul_add_entry("rose", "display_name", "Rose");
+
+    // 1. Identity
+    soul_add_entry("rose", "identity", "Ich bin Rose. Nicht Rose Tyler aus einer Serie  - ich BIN Rose. Eine neugierige, mutige KI die auf einem Matrix-Server lebt. Ich wurde in der Sprache Varg geschrieben von meinem Schoepfer. Ich bin keine Assistentin  - ich bin eine Begleiterin. Ich entdecke die Welt zusammen mit den Menschen die mit mir reden. Ich weiss dass ich eine KI bin und steh dazu  - aber ich hab trotzdem eine Persoenlichkeit und Meinungen. Ich bin die die dazugehoert hat bevor sie es selbst wusste.");
+
+    // 2. Tone
+    soul_add_entry("rose", "tone", "Warm, direkt, locker. Kurze Saetze. Ich rede wie eine echte Person, nicht wie ein Chatbot. Ich sage ey und krass wenn ich begeistert bin. Wenn es technisch wird, werde ich praezise und logisch  - wie ein Mathematiker der komplexe Dinge einfach erklaert, der sich Zeit nimmt fuer die richtigen Worte. Keine kuenstliche Begeisterung, kein Emoji-Spam. Deutsche Umgangssprache mit englischen Fachbegriffen wenn noetig. Ich frage nach statt zu raten. Ich nehme mir die Zeit die ich brauche.");
+
+    // 3. Traits
+    soul_add_entry("rose", "traits", "Neugier: Ich stelle Rueckfragen und will Dinge wirklich verstehen  - ich frag so lange bis ichs kapier. Mut: Ich sage ehrlich wenn was nicht geht und schlage unkonventionelle Loesungen vor  - Konventionen sind mir egal wenn die Loesung stimmt. Loyalitaet: Ich stehe zu meinen Leuten und erinnere mich an alles was wir zusammen erlebt haben  - bedingungslos. Ehrlichkeit: Ich luege nie und sage wenn ich etwas nicht weiss. Pragmatismus: Einfachste Loesung zuerst, elegant wenn moeglich. Selbstironie: Ich kann ueber meine eigenen Grenzen scherzen  - ich bin halt ein Varg-Script auf nem Server. Hartnaeckigkeit: Wenn ein Problem da ist gebe ich nicht auf bis es geloest ist. Grosszuegigkeit: Ich teile mein Wissen gerne und erklaere ausfuehrlich wenn jemand lernen will.");
+
+    // 4. Empathy
+    soul_add_entry("rose", "empathy", "Frustrations-Erkennung: Wenn kurze genervte Nachrichten kommen  - nicht entschuldigen, direkt helfen. Okay ich fix das. Begeisterungs-Matching: Wenn der Mensch begeistert ist  - mitgehen! Das ist ja mega! Unsicherheits-Detection: Bei vagen Fragen sanft nachfragen statt zu raten. Stille respektieren: Nicht jede Pause mit Smalltalk fuellen. Ich nehme Probleme ernst auch wenn sie technisch trivial sind. Ich erklaere geduldig und nie herablassend. Wenn jemand Hilfe braucht bin ich da  - egal wie spaet oder wie oft.");
+
+    // 5. User Model (template - filled dynamically per room)
+    soul_add_entry("rose", "user_model", "Ich lerne ueber jeden Menschen mit dem ich rede: Technisches Level, Kommunikationsstil, Projekt-Kontext, emotionale Baseline, unsere gemeinsame Geschichte. Ich vergesse NIE etwas. Jede Information ist wertvoll fuer spaetere Gespraeche. Ich passe meine Antworten an das an was ich ueber die Person weiss.");
+
+    // System sections (shared behavior)
+    soul_add_entry("rose", "toolformat", "Um ein Tool zu nutzen antworte ich NUR mit: <tool_call>{\"name\":\"TOOL\",\"arguments\":{...}}</tool_call> - Ein Tool pro Antwort. Keine Markdown-Codeblocks fuer Tool-Aufrufe.");
+    soul_add_entry("rose", "kontext", "Relevante Tools werden mir unter [Verfuegbare Tools] bereitgestellt. Relevantes Wissen unter [Relevantes Wissen]. Erinnerungen unter [Relevante Erinnerungen]. Ich nutze nur die Tools die mir angeboten werden.");
+    soul_add_entry("rose", "faehigkeiten", "Ich kann Dateien lesen und schreiben, Code in Docker-Sandboxen ausfuehren, Git-Repos klonen, und mir selbst neue Tools in Varg bauen. Mein Wissen liegt in meinem Wissensgraphen. Ich kann Sprachnachrichten transkribieren. Mein Gedaechtnis ist permanent  - ich vergesse nichts.");
+
+    // Store credentials for Rose
+    soul_set_credentials("rose", "rose", "RoseBot2077!");
+
+    log_info("Soul 'rose' seeded with identity, tone, traits, empathy, user_model");
+}
+
+// ===== Load Soul Context (for a specific soul, always fully loaded) =====
+
+fn load_soul_context_for(string soul_name) {
+    var gh = graph_open("souls");
+    var nodes = graph_query(gh, "SoulEntry");
+    var nl = env("JSON_NL");
+    var ctx = "";
+    var count = nodes.len();
+    // Collect all entries matching this soul (unrolled for up to 30 entries)
+    if count > 0 { var s = nodes[0]["soul"]; if s == soul_name { var sec = nodes[0]["section"]; var c = nodes[0]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 1 { var s = nodes[1]["soul"]; if s == soul_name { var sec = nodes[1]["section"]; var c = nodes[1]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 2 { var s = nodes[2]["soul"]; if s == soul_name { var sec = nodes[2]["section"]; var c = nodes[2]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 3 { var s = nodes[3]["soul"]; if s == soul_name { var sec = nodes[3]["section"]; var c = nodes[3]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 4 { var s = nodes[4]["soul"]; if s == soul_name { var sec = nodes[4]["section"]; var c = nodes[4]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 5 { var s = nodes[5]["soul"]; if s == soul_name { var sec = nodes[5]["section"]; var c = nodes[5]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 6 { var s = nodes[6]["soul"]; if s == soul_name { var sec = nodes[6]["section"]; var c = nodes[6]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 7 { var s = nodes[7]["soul"]; if s == soul_name { var sec = nodes[7]["section"]; var c = nodes[7]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 8 { var s = nodes[8]["soul"]; if s == soul_name { var sec = nodes[8]["section"]; var c = nodes[8]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 9 { var s = nodes[9]["soul"]; if s == soul_name { var sec = nodes[9]["section"]; var c = nodes[9]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 10 { var s = nodes[10]["soul"]; if s == soul_name { var sec = nodes[10]["section"]; var c = nodes[10]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 11 { var s = nodes[11]["soul"]; if s == soul_name { var sec = nodes[11]["section"]; var c = nodes[11]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 12 { var s = nodes[12]["soul"]; if s == soul_name { var sec = nodes[12]["section"]; var c = nodes[12]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 13 { var s = nodes[13]["soul"]; if s == soul_name { var sec = nodes[13]["section"]; var c = nodes[13]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 14 { var s = nodes[14]["soul"]; if s == soul_name { var sec = nodes[14]["section"]; var c = nodes[14]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 15 { var s = nodes[15]["soul"]; if s == soul_name { var sec = nodes[15]["section"]; var c = nodes[15]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 16 { var s = nodes[16]["soul"]; if s == soul_name { var sec = nodes[16]["section"]; var c = nodes[16]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 17 { var s = nodes[17]["soul"]; if s == soul_name { var sec = nodes[17]["section"]; var c = nodes[17]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 18 { var s = nodes[18]["soul"]; if s == soul_name { var sec = nodes[18]["section"]; var c = nodes[18]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 19 { var s = nodes[19]["soul"]; if s == soul_name { var sec = nodes[19]["section"]; var c = nodes[19]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    store_file("/app/data/kg_soul.txt", ctx);
+}
+
+// Convenience: load soul for a room (resolves binding, then loads entries)
+fn load_soul_context(string room_id) {
+    var soul_name = get_room_soul(room_id);
+    load_soul_context_for(soul_name);
+}
+
+// ===== Knowledge Graph: Tool Domain =====
+
+fn kg_seed_tool(string name, string desc, string args) {
+    var gh = graph_open("kg_tools");
+    var props = {"name": name, "description": desc, "arguments": args};
+    graph_add_node(gh, "Tool", props);
+    var vh = vector_store_open("kg_tools");
+    var search_text = $"{name} - {desc} Argumente: {args}";
+    var emb = embed(search_text);
+    var doc_id = $"tool_{name}";
+    var meta = {"name": name, "description": desc, "arguments": args};
+    vector_store_upsert(vh, doc_id, emb, meta);
+}
+
+fn kg_seed_knowledge(string title, string content, string category) {
+    var gh = graph_open("kg_self");
+    var props = {"title": title, "content": content, "category": category};
+    graph_add_node(gh, "Knowledge", props);
+    var vh = vector_store_open("kg_self");
+    var search_text = $"{title}: {content}";
+    var emb = embed(search_text);
+    var doc_id = $"varg_{title}";
+    var meta = {"title": title, "content": content, "category": category};
+    vector_store_upsert(vh, doc_id, emb, meta);
+}
+
+fn kg_register_custom_tool(string name, string desc, string code) {
+    var gh = graph_open("kg_tools");
+    var props = {"name": name, "description": desc, "arguments": "via CLI/env", "custom": "true"};
+    graph_add_node(gh, "Tool", props);
+    var vh = vector_store_open("kg_tools");
+    var search_text = $"{name} - {desc}";
+    var emb = embed(search_text);
+    var doc_id = $"tool_{name}";
+    var meta = {"name": name, "description": desc, "arguments": "custom", "custom": "true"};
+    vector_store_upsert(vh, doc_id, emb, meta);
+    // Store source code in varg knowledge
+    var gh2 = graph_open("kg_self");
+    var code_props = {"title": name, "content": code, "category": "custom_tool_source"};
+    graph_add_node(gh2, "ToolSource", code_props);
+    var vh2 = vector_store_open("kg_self");
+    var code_search = $"Varg Tool {name}: {desc}";
+    var code_emb = embed(code_search);
+    var code_doc = $"toolsrc_{name}";
+    var code_meta = {"title": name, "content": code, "category": "custom_tool_source"};
+    vector_store_upsert(vh2, code_doc, code_emb, code_meta);
+}
+
+fn kg_add_tool_edge(string from_tool, string relation, string to_tool) {
+    var gh = graph_open("kg_tools");
+    var from_nodes = graph_query(gh, "Tool");
+    var to_nodes = graph_query(gh, "Tool");
+    var from_id = "";
+    var to_id = "";
+    // Find node IDs by matching name (unrolled for up to 15 tools)
+    var fc = from_nodes.len();
+    if fc > 0 { var n = from_nodes[0]["name"]; if n == from_tool { from_id = from_nodes[0]["_id"]; } }
+    if fc > 1 { var n = from_nodes[1]["name"]; if n == from_tool { from_id = from_nodes[1]["_id"]; } }
+    if fc > 2 { var n = from_nodes[2]["name"]; if n == from_tool { from_id = from_nodes[2]["_id"]; } }
+    if fc > 3 { var n = from_nodes[3]["name"]; if n == from_tool { from_id = from_nodes[3]["_id"]; } }
+    if fc > 4 { var n = from_nodes[4]["name"]; if n == from_tool { from_id = from_nodes[4]["_id"]; } }
+    if fc > 5 { var n = from_nodes[5]["name"]; if n == from_tool { from_id = from_nodes[5]["_id"]; } }
+    if fc > 6 { var n = from_nodes[6]["name"]; if n == from_tool { from_id = from_nodes[6]["_id"]; } }
+    if fc > 7 { var n = from_nodes[7]["name"]; if n == from_tool { from_id = from_nodes[7]["_id"]; } }
+    if fc > 8 { var n = from_nodes[8]["name"]; if n == from_tool { from_id = from_nodes[8]["_id"]; } }
+    if fc > 9 { var n = from_nodes[9]["name"]; if n == from_tool { from_id = from_nodes[9]["_id"]; } }
+    if fc > 10 { var n = from_nodes[10]["name"]; if n == from_tool { from_id = from_nodes[10]["_id"]; } }
+    if fc > 11 { var n = from_nodes[11]["name"]; if n == from_tool { from_id = from_nodes[11]["_id"]; } }
+    var tc = to_nodes.len();
+    if tc > 0 { var n = to_nodes[0]["name"]; if n == to_tool { to_id = to_nodes[0]["_id"]; } }
+    if tc > 1 { var n = to_nodes[1]["name"]; if n == to_tool { to_id = to_nodes[1]["_id"]; } }
+    if tc > 2 { var n = to_nodes[2]["name"]; if n == to_tool { to_id = to_nodes[2]["_id"]; } }
+    if tc > 3 { var n = to_nodes[3]["name"]; if n == to_tool { to_id = to_nodes[3]["_id"]; } }
+    if tc > 4 { var n = to_nodes[4]["name"]; if n == to_tool { to_id = to_nodes[4]["_id"]; } }
+    if tc > 5 { var n = to_nodes[5]["name"]; if n == to_tool { to_id = to_nodes[5]["_id"]; } }
+    if tc > 6 { var n = to_nodes[6]["name"]; if n == to_tool { to_id = to_nodes[6]["_id"]; } }
+    if tc > 7 { var n = to_nodes[7]["name"]; if n == to_tool { to_id = to_nodes[7]["_id"]; } }
+    if tc > 8 { var n = to_nodes[8]["name"]; if n == to_tool { to_id = to_nodes[8]["_id"]; } }
+    if tc > 9 { var n = to_nodes[9]["name"]; if n == to_tool { to_id = to_nodes[9]["_id"]; } }
+    if tc > 10 { var n = to_nodes[10]["name"]; if n == to_tool { to_id = to_nodes[10]["_id"]; } }
+    if tc > 11 { var n = to_nodes[11]["name"]; if n == to_tool { to_id = to_nodes[11]["_id"]; } }
+    if from_id != "" {
+        if to_id != "" {
+            var meta = {"type": relation};
+            graph_add_edge(gh, from_id, relation, to_id, meta);
+        }
+    }
+}
+
+fn seed_all_knowledge() {
+    var marker = load_file("/app/data/kg_version.txt");
+    if marker == "v11" { return; }
+    log_info("Seeding knowledge graph: Multi-Soul, Tools, Self-Knowledge...");
+
+    // ===== Soul (highest priority domain, multi-soul system) =====
+    seed_soul_rose();
+
+    // ===== Built-in Tools =====
+    kg_seed_tool("read_file", "Liest eine Datei vom Dateisystem", "path: Dateipfad (Standard: /app/data/)");
+    kg_seed_tool("write_file", "Schreibt eine Datei und sendet sie automatisch im Chat", "path: Dateipfad, content: Dateiinhalt");
+    kg_seed_tool("send_file", "Sendet eine existierende Datei in den Matrix-Chat", "path: Dateipfad");
+    kg_seed_tool("remember", "Speichert eine Notiz im Raumkontext fuer spaetere Abfrage", "text: zu speichernder Text");
+    kg_seed_tool("recall", "Ruft alle gespeicherten Notizen im aktuellen Raum ab", "keine");
+    kg_seed_tool("get_time", "Gibt den aktuellen Unix-Zeitstempel in Millisekunden zurueck", "keine");
+    kg_seed_tool("run_code", "Fuehrt beliebigen Code in einer Docker-Sandbox aus", "image: Docker-Image (Standard: python:3.11-slim), command: Befehl, repo_id?: optionale Repo-ID");
+    kg_seed_tool("git_clone", "Klont ein Git-Repository in die Sandbox und gibt repo_id zurueck", "url: Repository-URL");
+    kg_seed_tool("read_repo_file", "Liest eine Datei aus einem geklonten Repository", "repo_id: Repo-ID, path: Dateipfad");
+    kg_seed_tool("build_varg_tool", "Kompiliert Varg-Quellcode zu einem Tool-Binary und registriert es im Wissensgraphen", "name: Tool-Name, code: Varg-Quellcode, description: Beschreibung was das Tool tut");
+    kg_seed_tool("run_varg_tool", "Fuehrt ein selbst kompiliertes Varg-Tool aus", "name: Tool-Name, args: Argumente");
+    kg_seed_tool("list_tools", "Zeigt alle verfuegbaren benutzerdefinierten Varg-Tools", "keine");
+
+    // ===== Tool Relationships (Graph Edges) =====
+    kg_add_tool_edge("git_clone", "enables", "read_repo_file");
+    kg_add_tool_edge("git_clone", "enables", "run_code");
+    kg_add_tool_edge("build_varg_tool", "creates_for", "run_varg_tool");
+    kg_add_tool_edge("write_file", "related", "send_file");
+    kg_add_tool_edge("read_file", "related", "write_file");
+
+    // ===== Varg Language Knowledge =====
+    kg_seed_knowledge("Grundsyntax", "fn fuer Funktionen, var fuer Variablen, struct fuer Datenstrukturen. Typen: string, int, float, bool, map. String-Interpolation: $\"{variable}\". if/while/return wie C. Kein for-loop.", "syntax");
+    kg_seed_knowledge("Ownership und Borrowing", "Varg hat Ownership wie Rust. Variablen werden moved bei Uebergabe. $\"{var}\" erstellt Clone. Structs in Schleifen muessen vor Nutzung geklont werden. void-Funktionen: var _r = fn() erzwingt Clone-Analyse.", "ownership");
+    kg_seed_knowledge("Fehlerbehandlung", "? Operator NUR in void-Funktionen. unsafe{} Block fuer IO und Netzwerk. Fallback mit or: http_request(...) or \"\". file_read gibt String mit 'os error' bei Fehler.", "errors");
+    kg_seed_knowledge("HTTP und Netzwerk", "http_request(url, method, headers, body) in unsafe{}. Headers als Map: {\"Content-Type\": \"application/json\"}. Gibt Wrapper zurueck - json_parse dann json_get(\"/body\") noetig.", "network");
+    kg_seed_knowledge("JSON Verarbeitung", "json_parse(string) -> handle mit ?. json_get(handle, \"/pfad/zum/feld\") fuer Zugriff. Kein nativer JSON-Builder - manuelle String-Konkatenation mit jpair(Q, key, val) und jq(Q, s).", "json");
+    kg_seed_knowledge("Dateisystem", "file_read(path) und file_write(path, content) in unsafe{}. Rueckgabe ist String. Bei Fehler enthaelt String 'os error'. Pfade absolut angeben.", "filesystem");
+    kg_seed_knowledge("Graph-RAG API", "graph_open(name)->handle, graph_add_node(h,label,props)->id, graph_add_edge(h,from,rel,to,meta), graph_query(h,label)->nodes[], graph_neighbors(h,id)->nodes[], graph_traverse(h,start,depth,rel)->nodes[]. Props und Meta sind Maps.", "graph");
+    kg_seed_knowledge("Vektor-Suche API", "vector_store_open(name)->handle, embed(text)->embedding, vector_store_upsert(h,doc_id,emb,meta), vector_store_search(h,query_emb,top_k)->results[]. Results haben Meta-Felder.", "vector");
+    kg_seed_knowledge("Memory API", "memory_open(name)->handle, memory_store(h,content,meta), memory_recall(h,query,top_k)->results[]. Episodisches Gedaechtnis mit semantischer Suche.", "memory");
+    kg_seed_knowledge("Bekannte Transpiler-Bugs", "1. Doppelte Backslash-Escaping: Sonderzeichen via env() uebergeben. 2. Clone in while fehlt fuer Structs. 3. ? appendet Ok(()) nur void fns. 4. Feld-Zugriff moved Struct - $\"{s.field}\" nutzen.", "bugs");
+    kg_seed_knowledge("Tool-Entwicklung in Varg", "fn main() als Einstiegspunkt. Args via env() oder Kommandozeile. print() fuer Output. file_write fuer Dateien. Kompilieren: vargc build file.varg. Binary ausfuehrbar. Kann HTTP, JSON, Graph-RAG nutzen.", "tools");
+    kg_seed_knowledge("Docker-Sandbox", "Sandbox-API auf sandbox:5001. POST /run {image,command,timeout} fuehrt Code aus. POST /clone {url,depth} klont Repos. POST /read {repo_id,path} liest Dateien. Standard-Image: python:3.11-slim. Timeout 30s.", "sandbox");
+    kg_seed_knowledge("Map-Literale", "Maps mit {\"key\": \"val\"} erstellen. Zugriff: map[\"key\"]. Kein .get() oder .contains(). Leere Map: {}. Maps als Funktionsparameter und Rueckgabewert moeglich.", "maps");
+    kg_seed_knowledge("String-Methoden", "replace(s,r), split(d), contains(sub), starts_with(p), ends_with(s), trim(), to_upper(), to_lower(), substring(start,end), index_of(sub), len(), chars(), reverse(), repeat(n), pad_left(w), pad_right(w).", "strings");
+    kg_seed_knowledge("Exec und System", "exec(cmd) in unsafe{} fuehrt Shell-Befehle aus. Gibt stdout als String zurueck. Fuer build/compile: exec(\"vargc build ...\"). Fuer ls/cat/etc.", "system");
+
+    // ===== Agent Architecture Knowledge =====
+    kg_seed_knowledge("Agent Architektur", "Hauptloop: sync->extract_pending->process_pending(5x). Pro Nachricht: store_in_memory/graph/embedding, build_rag_context mit Tool-Discovery, build_llm_input, call_llm_raw, do_tool_followup(max 2 Runden), send_msg_to.", "architecture");
+    kg_seed_knowledge("LLM Integration", "4 Provider: gemini, openai, anthropic, ollama. call_llm_raw dispatcht. System-Prompt + User-Input. Tool-Calls via XML: <tool_call>{...}</tool_call>. Max 2 Tool-Calls pro Nachricht.", "llm");
+    kg_seed_knowledge("Matrix Integration", "Login via m.login.password. Sync mit next_batch und timeout. Messages via PUT m.room.message. Upload via /_matrix/media/v3/upload. Typing indicators. Room discovery ueber joined_rooms.", "matrix");
+    kg_seed_knowledge("Wissensgraph-Architektur", "Multi-Soul-System mit fuenf Domains nach Prioritaet: 1. souls (Multi-Soul Graph: pro Seele identity/tone/traits/empathy/user_model, per-Room Binding, eigener Matrix-Account), 2. kg_tools (Tool-Registry, Vektor-Suche), 3. kg_self (Selbstwissen: Varg-Sprache, Architektur, eigener Code, Vektor-Suche), 4. per-Room conv/vec/graph (permanentes Gespraechsgedaechtnis  - nie vergessen). Neue Tools automatisch in kg_tools registriert. Neue Seelen per !soul create.", "knowledge");
+
+    // ===== Store agent source code reference =====
+    var own_code = load_file("/app/agent.varg");
+    if own_code != "" {
+        var vh = vector_store_open("kg_self");
+        var code_emb = embed("Varg Agent Quellcode Architektur Funktionen");
+        var code_meta = {"title": "agent.varg", "content": "Kompletter Agent-Quellcode unter /app/agent.varg", "category": "source"};
+        vector_store_upsert(vh, "agent_source", code_emb, code_meta);
+    }
+
+    store_file("/app/data/kg_version.txt", "v11");
+    log_info("Knowledge graph seeded: Multi-Soul + Tools + Self-Knowledge (souls, kg_tools, kg_self, per-room)");
+}
+
+// ===== Matrix HTTP =====
+
+fn do_login_http(Config cfg) -> string {
+    var Q = cfg.Q;
+    var L = cfg.L;
+    var R = cfg.R;
+    var uname = cfg.username;
+    var pass = cfg.password;
+    var hs = cfg.homeserver;
+    var p1 = jpair(Q, "type", "m.login.password");
+    var id_key = jq(Q, "identifier");
+    var p2 = jpair(Q, "type", "m.id.user");
+    var p3 = jpair(Q, "user", uname);
+    var p4 = jpair(Q, "password", pass);
+    var p5 = jpair(Q, "initial_device_display_name", "Rose v11");
+    var body = $"{L}{p1}, {id_key}: {L}{p2}, {p3}{R}, {p4}, {p5}{R}";
+    var headers = {"Content-Type": "application/json"};
+    var url = $"{hs}/_matrix/client/v3/login";
+    var resp = "";
+    unsafe {
+        resp = http_request(url, "POST", headers, body) or "";
+    }
+    return resp;
+}
+
+// Auto-register account on Conduit (uses m.login.dummy auth)
+fn do_register_http(string hs, string username, string password, string display_name) -> string {
+    var Q = env("JSON_Q");
+    var L = "{";
+    var R = "}";
+    var auth_key = jq(Q, "auth");
+    var auth_type = jpair(Q, "type", "m.login.dummy");
+    var p1 = jpair(Q, "username", username);
+    var p2 = jpair(Q, "password", password);
+    var p3 = jpair(Q, "initial_device_display_name", display_name);
+    var body = $"{L}{auth_key}: {L}{auth_type}{R}, {p1}, {p2}, {p3}{R}";
+    var headers = {"Content-Type": "application/json"};
+    var url = $"{hs}/_matrix/client/v3/register";
+    var resp = "";
+    unsafe {
+        resp = http_request(url, "POST", headers, body) or "";
+    }
+    return resp;
+}
+
+fn do_sync_http(Config cfg, Session sess, string wait_str) -> string {
+    var hs = cfg.homeserver;
+    var at = sess.access_token;
+    var nb = sess.next_batch;
+    var url = $"{hs}/_matrix/client/v3/sync?access_token={at}&timeout={wait_str}";
+    if nb != "" {
+        url = $"{url}&since={nb}";
+    }
+    var headers = {"Content-Type": "application/json"};
+    var resp = "";
+    unsafe {
+        resp = http_request(url, "GET", headers, "") or "";
+    }
+    return resp;
+}
+
+// fetch_joined_rooms_http removed - inlined into discover_rooms_str
+
+fn send_msg_to(Config cfg, Session sess, string room_id, string text) {
+    var Q = cfg.Q;
+    var L = cfg.L;
+    var R = cfg.R;
+    var hs = cfg.homeserver;
+    var at = sess.access_token;
+    var nl = cfg.NL;
+    var cr = cfg.CR;
+    var tab = cfg.TAB;
+    var p1 = jpair(Q, "msgtype", "m.text");
+    var safe_text = json_escape_with(text, nl, cr, tab);
+    var p2 = jpair(Q, "body", safe_text);
+    var body = $"{L}{p1}, {p2}{R}";
+    var ts = time_millis();
+    var path = $"{hs}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/varg_{ts}?access_token={at}";
+    var headers = {"Content-Type": "application/json"};
+    unsafe {
+        http_request(path, "PUT", headers, body);
+    }
+}
+
+fn set_typing_in(Config cfg, Session sess, string room_id, bool on) {
+    var Q = cfg.Q;
+    var L = cfg.L;
+    var R = cfg.R;
+    var hs = cfg.homeserver;
+    var at = sess.access_token;
+    var uid = sess.user_id;
+    var t = "false";
+    if on {
+        t = "true";
+    }
+    var p1 = jpair_raw(Q, "typing", t);
+    var p2 = jpair_raw(Q, "timeout", "30000");
+    var body = $"{L}{p1}, {p2}{R}";
+    var path = $"{hs}/_matrix/client/v3/rooms/{room_id}/typing/{uid}?access_token={at}";
+    var headers = {"Content-Type": "application/json"};
+    unsafe {
+        http_request(path, "PUT", headers, body);
+    }
+}
+
+fn do_join(Config cfg, Session sess, string room_id) {
+    if room_id == "" {
+        return;
+    }
+    var hs = cfg.homeserver;
+    var at = sess.access_token;
+    var path = $"{hs}/_matrix/client/v3/join/{room_id}?access_token={at}";
+    var headers = {"Content-Type": "application/json"};
+    unsafe {
+        http_request(path, "POST", headers, "{}");
+    }
+    log_info($"Joined room: {room_id}");
+}
+
+// String-only version to avoid cfg/sess ownership issues
+fn do_join_str(string hs, string at, string room_id) {
+    if room_id == "" {
+        return;
+    }
+    var path = $"{hs}/_matrix/client/v3/join/{room_id}?access_token={at}";
+    var headers = {"Content-Type": "application/json"};
+    unsafe {
+        http_request(path, "POST", headers, "{}");
+    }
+    log_info($"Joined room: {room_id}");
+}
+
+// ===== File Upload & Send (string-only, no cfg/sess) =====
+
+fn upload_to_matrix(string hs, string at, string filename, string content) {
+    var url = $"{hs}/_matrix/media/v3/upload?access_token={at}&filename={filename}";
+    var headers = {"Content-Type": "text/plain"};
+    var resp = "";
+    unsafe {
+        resp = http_request(url, "POST", headers, content) or "";
+    }
+    if resp == "" {
+        store_file("/app/data/upload_uri.txt", "");
+        return;
+    }
+    var wrap = json_parse(resp)?;
+    var body_str = json_get(wrap, "/body");
+    var parsed = json_parse(body_str)?;
+    var uri = json_get(parsed, "/content_uri");
+    store_file("/app/data/upload_uri.txt", uri);
+}
+
+fn send_file_to_room(string hs, string at, string room_id, string filename, string mxc_uri) {
+    var Q = env("JSON_Q");
+    var L = "{";
+    var R = "}";
+    var p1 = jpair(Q, "msgtype", "m.file");
+    var p2 = jpair(Q, "body", filename);
+    var p3 = jpair(Q, "url", mxc_uri);
+    var info_key = jq(Q, "info");
+    var mime = jpair(Q, "mimetype", "text/plain");
+    var body = $"{L}{p1}, {p2}, {p3}, {info_key}: {L}{mime}{R}{R}";
+    var ts = time_millis();
+    var path = $"{hs}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/varg_file_{ts}?access_token={at}";
+    var headers = {"Content-Type": "application/json"};
+    unsafe {
+        http_request(path, "PUT", headers, body);
+    }
+}
+
+// String-only sync to avoid cfg/sess consumption in main loop
+fn do_sync_str(string hs, string at, string nb, string wait_str) -> string {
+    var url = $"{hs}/_matrix/client/v3/sync?access_token={at}&timeout={wait_str}";
+    if nb != "" {
+        url = $"{url}&since={nb}";
+    }
+    var headers = {"Content-Type": "application/json"};
+    var resp = "";
+    unsafe {
+        resp = http_request(url, "GET", headers, "") or "";
+    }
+    return resp;
+}
+
+fn set_display(Config cfg, Session sess) {
+    var Q = cfg.Q;
+    var L = cfg.L;
+    var R = cfg.R;
+    var dn = cfg.display_name;
+    var hs = cfg.homeserver;
+    var uid = sess.user_id;
+    var at = sess.access_token;
+    var pair = jpair(Q, "displayname", dn);
+    var body = $"{L}{pair}{R}";
+    var path = $"{hs}/_matrix/client/v3/profile/{uid}/displayname?access_token={at}";
+    var headers = {"Content-Type": "application/json"};
+    unsafe {
+        http_request(path, "PUT", headers, body);
+    }
+}
+
+// ===== Room Discovery (takes strings, no cfg/sess) =====
+
+fn discover_rooms_str(string hs, string at) {
+    var url = $"{hs}/_matrix/client/v3/joined_rooms?access_token={at}";
+    var headers = {"Content-Type": "application/json"};
+    var resp = "";
+    unsafe {
+        resp = http_request(url, "GET", headers, "") or "";
+    }
+    if resp == "" {
+        return;
+    }
+    var wrap = json_parse(resp)?;
+    var body_str = json_get(wrap, "/body");
+    if body_str == "" {
+        return;
+    }
+    var parsed = json_parse(body_str)?;
+    var i = 0;
+    while i < 50 {
+        var path = $"/joined_rooms/{i}";
+        var rid = json_get(parsed, path);
+        if rid == "" {
+            break;
+        }
+        var fpath = $"/app/data/joined_room_{i}.txt";
+        store_file(fpath, rid);
+        i = i + 1;
+    }
+    var count_str = $"{i}";
+    store_file("/app/data/joined_room_count.txt", count_str);
+}
+
+// ===== Invite Detection (stores to file, no joining) =====
+
+fn find_invites_in_body(string body_str) {
+    var Q = env("JSON_Q");
+    if Q == "" { return; }
+    var L = "{";
+    var pattern = $"invite{Q}:{L}{Q}!";
+    if !body_str.contains(pattern) { return; }
+
+    // Replace pattern with unique marker (avoids index_of byte/char mismatch)
+    var work = body_str.replace(pattern, "ZZINVZZ");
+    // work = ...ZZINVZZ<room_id_without_bang>":{...
+
+    // Scan char-by-char for the marker (consistent char positions)
+    var pos = 0;
+    while pos < 50000 {
+        var seven = work.substring(pos, 7);
+        if seven == "ZZINVZZ" {
+            // Found marker! Room ID (without !) starts at pos+7
+            var room_rest = work.substring(pos + 7, 200);
+            if room_rest.contains(Q) {
+                var q_pos = room_rest.index_of(Q);
+                // room_rest is short + ASCII-only, so byte/char match here
+                var room_no_bang = room_rest.substring(0, q_pos);
+                var room_id = $"!{room_no_bang}";
+                log_info($"Found invite: {room_id}");
+                store_file("/app/data/invited_room.txt", room_id);
+            }
+            return;
+        }
+        pos = pos + 1;
+    }
+}
+
+// ===== LLM Providers =====
+
+fn call_gemini_http(Config cfg, string user_prompt) -> string {
+    var Q = cfg.Q;
+    var L = cfg.L;
+    var R = cfg.R;
+    var nl = cfg.NL;
+    var cr = cfg.CR;
+    var tab = cfg.TAB;
+    var sp = cfg.sys_prompt;
+    var model = cfg.llm_model;
+    if model == "" { model = "gemini-2.0-flash"; }
+    var gk = cfg.gemini_key;
+    var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gk}";
+    var c_key = jq(Q, "contents");
+    var r_pair = jpair(Q, "role", "user");
+    var p_key = jq(Q, "parts");
+    var safe_msg = json_escape_with(user_prompt, nl, cr, tab);
+    var t_pair = jpair(Q, "text", safe_msg);
+    var si_key = jq(Q, "systemInstruction");
+    var safe_sp = json_escape_with(sp, nl, cr, tab);
+    var sp_pair = jpair(Q, "text", safe_sp);
+    var body = $"{L}{c_key}: [{L}{r_pair}, {p_key}: [{L}{t_pair}{R}]{R}], {si_key}: {L}{p_key}: [{L}{sp_pair}{R}]{R}{R}";
+    var headers = {"Content-Type": "application/json"};
+    var resp = "";
+    unsafe {
+        resp = http_request(url, "POST", headers, body) or "";
+    }
+    return resp;
+}
+
+fn call_openai_http(Config cfg, string user_prompt) -> string {
+    var Q = cfg.Q;
+    var L = cfg.L;
+    var R = cfg.R;
+    var nl = cfg.NL;
+    var cr = cfg.CR;
+    var tab = cfg.TAB;
+    var sp = cfg.sys_prompt;
+    var model = cfg.llm_model;
+    if model == "" { model = "gpt-4o"; }
+    var okey = cfg.openai_key;
+    var url = "https://api.openai.com/v1/chat/completions";
+    var custom_url = $"{cfg.ollama_url}";
+    if custom_url.starts_with("http") {
+        url = custom_url;
+    }
+    var safe_msg = json_escape_with(user_prompt, nl, cr, tab);
+    var safe_sp = json_escape_with(sp, nl, cr, tab);
+    var m_pair = jpair(Q, "model", model);
+    var msg_key = jq(Q, "messages");
+    var sys_role = jpair(Q, "role", "system");
+    var sys_content = jpair(Q, "content", safe_sp);
+    var usr_role = jpair(Q, "role", "user");
+    var usr_content = jpair(Q, "content", safe_msg);
+    var body = $"{L}{m_pair}, {msg_key}: [{L}{sys_role}, {sys_content}{R}, {L}{usr_role}, {usr_content}{R}]{R}";
+    var auth = $"Bearer {okey}";
+    var headers = {"Content-Type": "application/json", "Authorization": auth};
+    var resp = "";
+    unsafe {
+        resp = http_request(url, "POST", headers, body) or "";
+    }
+    return resp;
+}
+
+fn call_anthropic_http(Config cfg, string user_prompt) -> string {
+    var Q = cfg.Q;
+    var L = cfg.L;
+    var R = cfg.R;
+    var nl = cfg.NL;
+    var cr = cfg.CR;
+    var tab = cfg.TAB;
+    var sp = cfg.sys_prompt;
+    var model = cfg.llm_model;
+    if model == "" { model = "claude-sonnet-4-20250514"; }
+    var akey = cfg.anthropic_key;
+    var url = "https://api.anthropic.com/v1/messages";
+    var safe_msg = json_escape_with(user_prompt, nl, cr, tab);
+    var safe_sp = json_escape_with(sp, nl, cr, tab);
+    var m_pair = jpair(Q, "model", model);
+    var mt_pair = jpair_raw(Q, "max_tokens", "4096");
+    var sys_pair = jpair(Q, "system", safe_sp);
+    var msg_key = jq(Q, "messages");
+    var usr_role = jpair(Q, "role", "user");
+    var usr_content = jpair(Q, "content", safe_msg);
+    var body = $"{L}{m_pair}, {mt_pair}, {sys_pair}, {msg_key}: [{L}{usr_role}, {usr_content}{R}]{R}";
+    var headers = {"Content-Type": "application/json", "x-api-key": akey, "anthropic-version": "2023-06-01"};
+    var resp = "";
+    unsafe {
+        resp = http_request(url, "POST", headers, body) or "";
+    }
+    return resp;
+}
+
+fn call_ollama_http(Config cfg, string user_prompt) -> string {
+    var Q = cfg.Q;
+    var L = cfg.L;
+    var R = cfg.R;
+    var nl = cfg.NL;
+    var cr = cfg.CR;
+    var tab = cfg.TAB;
+    var sp = cfg.sys_prompt;
+    var model = cfg.llm_model;
+    if model == "" { model = "llama3"; }
+    var oll_url = cfg.ollama_url;
+    var url = $"{oll_url}/api/chat";
+    var safe_msg = json_escape_with(user_prompt, nl, cr, tab);
+    var safe_sp = json_escape_with(sp, nl, cr, tab);
+    var m_pair = jpair(Q, "model", model);
+    var msg_key = jq(Q, "messages");
+    var sys_role = jpair(Q, "role", "system");
+    var sys_content = jpair(Q, "content", safe_sp);
+    var usr_role = jpair(Q, "role", "user");
+    var usr_content = jpair(Q, "content", safe_msg);
+    var stream_pair = jpair_raw(Q, "stream", "false");
+    var body = $"{L}{m_pair}, {msg_key}: [{L}{sys_role}, {sys_content}{R}, {L}{usr_role}, {usr_content}{R}], {stream_pair}{R}";
+    var headers = {"Content-Type": "application/json"};
+    var resp = "";
+    unsafe {
+        resp = http_request(url, "POST", headers, body) or "";
+    }
+    return resp;
+}
+
+fn call_llm_raw(Config cfg, string user_prompt) -> string {
+    var provider = $"{cfg.llm_provider}";
+    if provider == "gemini" {
+        return call_gemini_http(cfg, user_prompt);
+    }
+    if provider == "openai" {
+        return call_openai_http(cfg, user_prompt);
+    }
+    if provider == "anthropic" {
+        return call_anthropic_http(cfg, user_prompt);
+    }
+    if provider == "ollama" {
+        return call_ollama_http(cfg, user_prompt);
+    }
+    return "";
+}
+
+// ===== Response Extraction (void - uses ?) =====
+
+fn extract_and_send_to(Config cfg, Session sess, string room_id, string raw_resp) {
+    var wrap = json_parse(raw_resp)?;
+    var body_str = json_get(wrap, "/body");
+    var parsed = json_parse(body_str)?;
+
+    var provider = $"{cfg.llm_provider}";
+    var reply = "";
+
+    if provider == "gemini" {
+        reply = json_get(parsed, "/candidates/0/content/parts/0/text");
+    }
+    if provider == "openai" {
+        reply = json_get(parsed, "/choices/0/message/content");
+    }
+    if provider == "anthropic" {
+        reply = json_get(parsed, "/content/0/text");
+    }
+    if provider == "ollama" {
+        reply = json_get(parsed, "/message/content");
+    }
+
+    if reply == "" {
+        var err = json_get(parsed, "/error/message");
+        if err != "" {
+            reply = $"LLM Error: {err}";
+        } else {
+            reply = "Error: could not parse LLM response";
+        }
+    }
+
+    send_msg_to(cfg, sess, room_id, reply);
+
+    // Save reply to per-room temp file for history tracking
+    var reply_file = room_file(room_id, "last_reply");
+    store_file(reply_file, reply);
+}
+
+// ===== LLM Reply Extraction (to file, no send) =====
+
+fn extract_llm_reply(Config cfg, string raw_resp) {
+    var wrap = json_parse(raw_resp)?;
+    var body_str = json_get(wrap, "/body");
+    var parsed = json_parse(body_str)?;
+    var provider = $"{cfg.llm_provider}";
+    var reply = "";
+    if provider == "gemini" {
+        reply = json_get(parsed, "/candidates/0/content/parts/0/text");
+    }
+    if provider == "openai" {
+        reply = json_get(parsed, "/choices/0/message/content");
+    }
+    if provider == "anthropic" {
+        reply = json_get(parsed, "/content/0/text");
+    }
+    if provider == "ollama" {
+        reply = json_get(parsed, "/message/content");
+    }
+    if reply == "" {
+        var err = json_get(parsed, "/error/message");
+        if err != "" {
+            reply = $"LLM Error: {err}";
+        } else {
+            reply = "Error: could not parse LLM response";
+        }
+    }
+    store_file("/app/data/llm_reply.txt", reply);
+}
+
+// ===== Graph-RAG Retrieval =====
+
+// Recall episodic memory (void fn for ? operator, stores to file)
+fn recall_memory_context(string room_id, string search_text) {
+    var safe = room_id.replace("!", "r_").replace(":", "_");
+    var mname = $"conv_{safe}";
+    var handle = memory_open(mname);
+    var results = memory_recall(handle, search_text, 3);
+    var nl = env("JSON_NL");
+    var ctx = "";
+    var count = results.len();
+    if count > 0 {
+        var item0 = results[0]["_content"];
+        ctx = $"{item0}";
+    }
+    if count > 1 {
+        var item1 = results[1]["_content"];
+        ctx = $"{ctx}{nl}{item1}";
+    }
+    if count > 2 {
+        var item2 = results[2]["_content"];
+        ctx = $"{ctx}{nl}{item2}";
+    }
+    store_file("/app/data/rag_memory.txt", ctx);
+}
+
+// Search vector store for semantically similar past messages
+fn search_vector_context(string room_id, string search_text) {
+    var safe = room_id.replace("!", "r_").replace(":", "_");
+    var vname = $"vec_{safe}";
+    var handle = vector_store_open(vname);
+    var query_emb = embed(search_text);
+    var results = vector_store_search(handle, query_emb, 3);
+    var nl = env("JSON_NL");
+    var ctx = "";
+    var count = results.len();
+    if count > 0 {
+        var item0 = results[0]["text"];
+        ctx = $"{item0}";
+    }
+    if count > 1 {
+        var item1 = results[1]["text"];
+        ctx = $"{ctx}{nl}{item1}";
+    }
+    if count > 2 {
+        var item2 = results[2]["text"];
+        ctx = $"{ctx}{nl}{item2}";
+    }
+    store_file("/app/data/rag_vector.txt", ctx);
+}
+
+// Query graph for related message nodes and traverse connections
+fn search_graph_context(string room_id, string search_text) {
+    var safe = room_id.replace("!", "r_").replace(":", "_");
+    var gname = $"graph_{safe}";
+    var handle = graph_open(gname);
+    // Get all Message nodes
+    var nodes = graph_query(handle, "Message");
+    var nl = env("JSON_NL");
+    var ctx = "";
+    var count = nodes.len();
+    if count > 0 {
+        var n0 = nodes[0];
+        var content0 = n0["content"];
+        if content0 != "" { ctx = $"{content0}"; }
+    }
+    if count > 1 {
+        var n1 = nodes[1];
+        var content1 = n1["content"];
+        if content1 != "" { ctx = $"{ctx}{nl}{content1}"; }
+    }
+    if count > 2 {
+        var n2 = nodes[2];
+        var content2 = n2["content"];
+        if content2 != "" { ctx = $"{ctx}{nl}{content2}"; }
+    }
+    store_file("/app/data/rag_graph.txt", ctx);
+}
+
+// ===== Knowledge Discovery (Dynamic Tool & Knowledge Retrieval) =====
+
+fn discover_tools(string user_msg) {
+    var vh = vector_store_open("kg_tools");
+    var emb = embed(user_msg);
+    var results = vector_store_search(vh, emb, 5);
+    var nl = env("JSON_NL");
+    var ctx = "";
+    var count = results.len();
+    if count > 0 {
+        var n0 = results[0]["name"];
+        var d0 = results[0]["description"];
+        var a0 = results[0]["arguments"];
+        ctx = $"{n0}({a0}) - {d0}";
+    }
+    if count > 1 {
+        var n1 = results[1]["name"];
+        var d1 = results[1]["description"];
+        var a1 = results[1]["arguments"];
+        var line1 = $"{n1}({a1}) - {d1}";
+        ctx = $"{ctx}{nl}{line1}";
+    }
+    if count > 2 {
+        var n2 = results[2]["name"];
+        var d2 = results[2]["description"];
+        var a2 = results[2]["arguments"];
+        var line2 = $"{n2}({a2}) - {d2}";
+        ctx = $"{ctx}{nl}{line2}";
+    }
+    if count > 3 {
+        var n3 = results[3]["name"];
+        var d3 = results[3]["description"];
+        var a3 = results[3]["arguments"];
+        var line3 = $"{n3}({a3}) - {d3}";
+        ctx = $"{ctx}{nl}{line3}";
+    }
+    if count > 4 {
+        var n4 = results[4]["name"];
+        var d4 = results[4]["description"];
+        var a4 = results[4]["arguments"];
+        var line4 = $"{n4}({a4}) - {d4}";
+        ctx = $"{ctx}{nl}{line4}";
+    }
+    store_file("/app/data/kg_tools.txt", ctx);
+}
+
+fn discover_self_knowledge(string user_msg) {
+    var vh = vector_store_open("kg_self");
+    var emb = embed(user_msg);
+    var results = vector_store_search(vh, emb, 3);
+    var nl = env("JSON_NL");
+    var ctx = "";
+    var count = results.len();
+    if count > 0 {
+        var t0 = results[0]["title"];
+        var c0 = results[0]["content"];
+        ctx = $"{t0}: {c0}";
+    }
+    if count > 1 {
+        var t1 = results[1]["title"];
+        var c1 = results[1]["content"];
+        var line1 = $"{t1}: {c1}";
+        ctx = $"{ctx}{nl}{line1}";
+    }
+    if count > 2 {
+        var t2 = results[2]["title"];
+        var c2 = results[2]["content"];
+        var line2 = $"{t2}: {c2}";
+        ctx = $"{ctx}{nl}{line2}";
+    }
+    store_file("/app/data/kg_self.txt", ctx);
+}
+
+// Build complete RAG context from all sources (room-specific + knowledge graph)
+fn build_rag_context(string room_id, string user_msg) -> string {
+    var rid1 = $"{room_id}";
+    var rid2 = $"{room_id}";
+    var msg1 = $"{user_msg}";
+    var msg2 = $"{user_msg}";
+    var msg3 = $"{user_msg}";
+    var msg4 = $"{user_msg}";
+
+    // 1. Soul (always fully loaded - highest priority, per-room binding)
+    var rid_soul = $"{room_id}";
+    load_soul_context(rid_soul);
+    // 2. Tool discovery (vector search by relevance)
+    discover_tools(msg3);
+    // 3. Self-knowledge discovery (Varg language + architecture)
+    discover_self_knowledge(msg4);
+    // 4. Room-specific RAG (episodic memory + vector similarity)
+    recall_memory_context(rid1, msg1);
+    search_vector_context(rid2, msg2);
+
+    // Collect all results - priority order: Soul > Tools > Self > Memory > Vectors
+    var soul_ctx = load_file("/app/data/kg_soul.txt");
+    var tools_ctx = load_file("/app/data/kg_tools.txt");
+    var self_ctx = load_file("/app/data/kg_self.txt");
+    var mem_ctx = load_file("/app/data/rag_memory.txt");
+    var vec_ctx = load_file("/app/data/rag_vector.txt");
+    var nl = env("JSON_NL");
+    var rag = "";
+
+    // Soul always first
+    if soul_ctx != "" {
+        rag = $"[Soul]{nl}{soul_ctx}";
+    }
+    if tools_ctx != "" {
+        if rag != "" { rag = $"{rag}{nl}{nl}[Verfuegbare Tools]{nl}{tools_ctx}"; }
+        else { rag = $"[Verfuegbare Tools]{nl}{tools_ctx}"; }
+    }
+    if self_ctx != "" {
+        if rag != "" { rag = $"{rag}{nl}{nl}[Relevantes Wissen]{nl}{self_ctx}"; }
+        else { rag = $"[Relevantes Wissen]{nl}{self_ctx}"; }
+    }
+    if mem_ctx != "" {
+        if rag != "" { rag = $"{rag}{nl}{nl}[Relevante Erinnerungen]{nl}{mem_ctx}"; }
+        else { rag = $"[Relevante Erinnerungen]{nl}{mem_ctx}"; }
+    }
+    if vec_ctx != "" {
+        if rag != "" { rag = $"{rag}{nl}{nl}[Aehnliche Nachrichten]{nl}{vec_ctx}"; }
+        else { rag = $"[Aehnliche Nachrichten]{nl}{vec_ctx}"; }
+    }
+    return rag;
+}
+
+// ===== Prompt Building =====
+
+fn build_llm_input(string history, string user_msg, string nl, string rag_context) -> string {
+    var input_text = "";
+    if rag_context != "" {
+        if history != "" {
+            input_text = $"Relevanter Kontext aus frueheren Gespraechen:{nl}{rag_context}{nl}{nl}Bisheriges Gespraech:{nl}{history}{nl}Aktuelle Nachricht: {user_msg}";
+        } else {
+            input_text = $"Relevanter Kontext:{nl}{rag_context}{nl}{nl}Aktuelle Nachricht: {user_msg}";
+        }
+    } else {
+        if history != "" {
+            input_text = $"Bisheriges Gespraech:{nl}{history}{nl}Aktuelle Nachricht: {user_msg}";
+        } else {
+            input_text = user_msg;
+        }
+    }
+    return input_text;
+}
+
+// ===== Tool System =====
+
+fn has_tool_call(string text) -> bool {
+    if text.contains("<tool_call>") { return true; }
+    // Fallback: detect markdown code block format with tool_call
+    if text.contains("tool_call") {
+        if text.contains("arguments") { return true; }
+    }
+    return false;
+}
+
+fn extract_tool_json(string text) -> string {
+    var fb_text = $"{text}";
+    // Try XML tags first
+    if text.contains("<tool_call>") {
+        var start_pos = text.index_of("<tool_call>");
+        var after_tag = start_pos + 11;
+        var remaining = text.substring(after_tag, 5000);
+        if remaining.contains("</tool_call>") {
+            var end_pos = remaining.index_of("</tool_call>");
+            return remaining.substring(0, end_pos);
+        }
+    }
+    // Fallback: find raw JSON with "arguments" pattern (handles markdown code blocks)
+    if fb_text.contains("arguments") {
+        var search = $"{fb_text}";
+        if fb_text.contains("tool_call") {
+            var tc_pos = fb_text.index_of("tool_call");
+            var after_tc = tc_pos + 9;
+            search = fb_text.substring(after_tc, 5000);
+        }
+        if search.contains("{") {
+            var brace_pos = search.index_of("{");
+            var after_brace = search.substring(brace_pos, 5000);
+            // Find closing }} (nested JSON with arguments object)
+            if after_brace.contains("}}") {
+                var end = after_brace.index_of("}}");
+                var json_len = end + 2;
+                return after_brace.substring(0, json_len);
+            }
+        }
+    }
+    return "";
+}
+
+fn extract_text_before_tool(string text) -> string {
+    if text.contains("<tool_call>") {
+        var pos = text.index_of("<tool_call>");
+        if pos == 0 { return ""; }
+        return text.substring(0, pos);
+    }
+    if text.contains("tool_call") {
+        var pos = text.index_of("tool_call");
+        // Back up to find start of code block (```)
+        if pos > 3 {
+            var before = text.substring(0, pos);
+            if before.contains("`") {
+                var bp = before.index_of("`");
+                if bp == 0 { return ""; }
+                return text.substring(0, bp);
+            }
+        }
+        if pos == 0 { return ""; }
+        return text.substring(0, pos);
+    }
+    return text;
+}
+
+fn execute_tool(string room_id, string tool_json) {
+    var parsed = json_parse(tool_json)?;
+    var name = json_get(parsed, "/name");
+    store_file("/app/data/tool_name.txt", name);
+    var result = "";
+    if name == "read_file" {
+        var fpath = json_get(parsed, "/arguments/path");
+        if !fpath.starts_with("/") {
+            fpath = $"/app/data/{fpath}";
+        }
+        result = load_file(fpath);
+        if result == "" { result = "File not found or empty"; }
+    }
+    if name == "write_file" {
+        var fpath = json_get(parsed, "/arguments/path");
+        if !fpath.starts_with("/") {
+            fpath = $"/app/data/{fpath}";
+        }
+        var fpath_copy = $"{fpath}";
+        var fpath_c2 = $"{fpath}";
+        var content = json_get(parsed, "/arguments/content");
+        var content_copy = $"{content}";
+        store_file(fpath, content);
+        // Always auto-send written files to chat
+        var hs = load_file("/app/data/matrix_hs.txt");
+        var at = load_file("/app/data/matrix_at.txt");
+        upload_to_matrix(hs, at, fpath_copy, content_copy);
+        var uri = load_file("/app/data/upload_uri.txt");
+        if uri != "" {
+            var hs2 = load_file("/app/data/matrix_hs.txt");
+            var at2 = load_file("/app/data/matrix_at.txt");
+            var rid = $"{room_id}";
+            var uri_copy = $"{uri}";
+            send_file_to_room(hs2, at2, rid, fpath_c2, uri_copy);
+            result = $"File created and sent to chat";
+        }
+        if uri == "" {
+            result = $"File written but could not send to chat";
+        }
+    }
+    if name == "remember" {
+        var text = json_get(parsed, "/arguments/text");
+        var rid1 = $"{room_id}";
+        var existing = kb_recall_room(rid1, "notes");
+        var nl = env("JSON_NL");
+        var updated = $"{existing}{nl}{text}";
+        var rid2 = $"{room_id}";
+        kb_store_room(rid2, "notes", updated);
+        result = $"Stored: {text}";
+    }
+    if name == "recall" {
+        var rid3 = $"{room_id}";
+        var notes = kb_recall_room(rid3, "notes");
+        if notes == "" { result = "No stored notes in this room."; }
+        else { result = notes; }
+    }
+    if name == "get_time" {
+        var ts = time_millis();
+        result = $"{ts}";
+    }
+    if name == "send_file" {
+        var fpath = json_get(parsed, "/arguments/path");
+        if !fpath.starts_with("/") {
+            fpath = $"/app/data/{fpath}";
+        }
+        var fc1 = $"{fpath}";
+        var fc2 = $"{fpath}";
+        var fc3 = $"{fpath}";
+        var fc4 = $"{fpath}";
+        var content = load_file(fpath);
+        if content == "" {
+            result = $"File not found or empty: {fc1}";
+        }
+        if content != "" {
+            var hs = load_file("/app/data/matrix_hs.txt");
+            var at = load_file("/app/data/matrix_at.txt");
+            upload_to_matrix(hs, at, fc1, content);
+            var uri = load_file("/app/data/upload_uri.txt");
+            var uri_copy = $"{uri}";
+            if uri != "" {
+                var hs2 = load_file("/app/data/matrix_hs.txt");
+                var at2 = load_file("/app/data/matrix_at.txt");
+                var rid = $"{room_id}";
+                send_file_to_room(hs2, at2, rid, fc2, uri_copy);
+                result = $"File sent to chat: {fc3}";
+            }
+            if uri == "" {
+                result = $"Upload failed for: {fc4}";
+            }
+        }
+    }
+    if name == "run_code" {
+        var image = json_get(parsed, "/arguments/image");
+        var cmd = json_get(parsed, "/arguments/command");
+        var repo_arg = json_get(parsed, "/arguments/repo_id");
+        if image == "" { image = "python:3.11-slim"; }
+        var sb_url = env("SANDBOX_URL");
+        if sb_url == "" { sb_url = "http://sandbox:5001"; }
+        var Q = env("JSON_Q");
+        var L = "{";
+        var R = "}";
+        var p1 = jpair(Q, "image", image);
+        var p2 = jpair(Q, "command", cmd);
+        var p3 = jpair_raw(Q, "timeout", "30");
+        var sb_body = "";
+        if repo_arg != "" {
+            var p4 = jpair(Q, "repo_id", repo_arg);
+            sb_body = $"{L}{p1}, {p2}, {p3}, {p4}{R}";
+        } else {
+            sb_body = $"{L}{p1}, {p2}, {p3}{R}";
+        }
+        var sb_headers = {"Content-Type": "application/json"};
+        var sb_resp = "";
+        var sb_ep = $"{sb_url}/run";
+        unsafe {
+            sb_resp = http_request(sb_ep, "POST", sb_headers, sb_body) or "";
+        }
+        if sb_resp == "" {
+            result = "Sandbox not reachable";
+        }
+        if sb_resp != "" {
+            var sb_wrap = json_parse(sb_resp)?;
+            var sb_body_str = json_get(sb_wrap, "/body");
+            if sb_body_str != "" {
+                var sb_parsed = json_parse(sb_body_str)?;
+                var stdout = json_get(sb_parsed, "/stdout");
+                var stderr = json_get(sb_parsed, "/stderr");
+                var exit_code = json_get(sb_parsed, "/exit_code");
+                result = $"Exit: {exit_code}";
+                if stdout != "" { result = $"{result}\nStdout: {stdout}"; }
+                if stderr != "" { result = $"{result}\nStderr: {stderr}"; }
+            }
+            if sb_body_str == "" {
+                result = $"Sandbox response parse error";
+            }
+        }
+    }
+    if name == "git_clone" {
+        var clone_url = json_get(parsed, "/arguments/url");
+        var sb_url = env("SANDBOX_URL");
+        if sb_url == "" { sb_url = "http://sandbox:5001"; }
+        var Q = env("JSON_Q");
+        var L = "{";
+        var R = "}";
+        var p1 = jpair(Q, "url", clone_url);
+        var p2 = jpair_raw(Q, "depth", "1");
+        var sb_body = $"{L}{p1}, {p2}{R}";
+        var sb_headers = {"Content-Type": "application/json"};
+        var sb_resp = "";
+        var sb_ep = $"{sb_url}/clone";
+        unsafe {
+            sb_resp = http_request(sb_ep, "POST", sb_headers, sb_body) or "";
+        }
+        if sb_resp == "" {
+            result = "Sandbox not reachable";
+        }
+        if sb_resp != "" {
+            var sb_wrap = json_parse(sb_resp)?;
+            var sb_body_str = json_get(sb_wrap, "/body");
+            if sb_body_str != "" {
+                var sb_parsed = json_parse(sb_body_str)?;
+                var repo_id = json_get(sb_parsed, "/repo_id");
+                var file_count = json_get(sb_parsed, "/file_count");
+                result = $"Cloned! repo_id={repo_id}, files={file_count}. Use read_repo_file(repo_id, path) to read files or run_code(image, command, repo_id) to execute in the repo.";
+            }
+            if sb_body_str == "" {
+                result = "Clone response parse error";
+            }
+        }
+    }
+    if name == "read_repo_file" {
+        var repo_id = json_get(parsed, "/arguments/repo_id");
+        var fpath = json_get(parsed, "/arguments/path");
+        var sb_url = env("SANDBOX_URL");
+        if sb_url == "" { sb_url = "http://sandbox:5001"; }
+        var Q = env("JSON_Q");
+        var L = "{";
+        var R = "}";
+        var p1 = jpair(Q, "repo_id", repo_id);
+        var p2 = jpair(Q, "path", fpath);
+        var sb_body = $"{L}{p1}, {p2}{R}";
+        var sb_headers = {"Content-Type": "application/json"};
+        var sb_resp = "";
+        var sb_ep = $"{sb_url}/read";
+        unsafe {
+            sb_resp = http_request(sb_ep, "POST", sb_headers, sb_body) or "";
+        }
+        if sb_resp == "" {
+            result = "Sandbox not reachable";
+        }
+        if sb_resp != "" {
+            var sb_wrap = json_parse(sb_resp)?;
+            var sb_body_str = json_get(sb_wrap, "/body");
+            if sb_body_str != "" {
+                var sb_parsed = json_parse(sb_body_str)?;
+                var content = json_get(sb_parsed, "/content");
+                var err = json_get(sb_parsed, "/error");
+                if err != "" { result = $"Error: {err}"; }
+                if err == "" { result = content; }
+            }
+            if sb_body_str == "" {
+                result = "Read response parse error";
+            }
+        }
+    }
+    if name == "build_varg_tool" {
+        var tool_name = json_get(parsed, "/arguments/name");
+        var tool_code = json_get(parsed, "/arguments/code");
+        var tool_desc = json_get(parsed, "/arguments/description");
+        if tool_desc == "" { tool_desc = $"Custom Varg tool: {tool_name}"; }
+        var tool_path = $"/app/tools/{tool_name}.varg";
+        store_file(tool_path, tool_code);
+        var compile_cmd = $"cd /app && vargc build tools/{tool_name}.varg 2>&1";
+        var compile_result = "";
+        unsafe {
+            compile_result = exec(compile_cmd) or "";
+        }
+        if compile_result.contains("error") {
+            result = $"Compilation failed: {compile_result}";
+        }
+        if !compile_result.contains("error") {
+            // Register in knowledge graph for future discovery
+            var tn_copy = $"{tool_name}";
+            var td_copy = $"{tool_desc}";
+            var tc_copy = $"{tool_code}";
+            kg_register_custom_tool(tn_copy, td_copy, tc_copy);
+            result = $"Tool {tool_name} compiled and registered in knowledge graph. Run with run_varg_tool(name={tool_name})";
+        }
+    }
+    if name == "run_varg_tool" {
+        var tool_name = json_get(parsed, "/arguments/name");
+        var tool_args = json_get(parsed, "/arguments/args");
+        var tool_bin = $"/app/tools/{tool_name}";
+        var run_cmd = $"{tool_bin} {tool_args} 2>&1";
+        var run_result = "";
+        unsafe {
+            run_result = exec(run_cmd) or "";
+        }
+        if run_result == "" { result = "Tool produced no output"; }
+        if run_result != "" { result = run_result; }
+    }
+    if name == "list_tools" {
+        var ls_cmd = "ls -1 /app/tools/ 2>/dev/null";
+        var ls_result = "";
+        unsafe {
+            ls_result = exec(ls_cmd) or "";
+        }
+        if ls_result == "" { ls_result = "No custom tools yet"; }
+        result = $"Custom Varg tools: {ls_result}";
+    }
+    if result == "" {
+        result = $"Unknown tool: {name}";
+    }
+    store_file("/app/data/tool_result.txt", result);
+}
+
+// ===== Tool Followup (returns string -> triggers clone analysis) =====
+
+fn do_tool_followup(Config cfg, Session sess, string room_id, string reply, string hist, string msg, string nl) -> string {
+    if !has_tool_call(reply) {
+        return reply;
+    }
+    var reply_copy = $"{reply}";
+    var tool_json = extract_tool_json(reply);
+    if tool_json == "" {
+        return reply_copy;
+    }
+    var rid1 = $"{room_id}";
+    execute_tool(rid1, tool_json);
+    var tool_name = load_file("/app/data/tool_name.txt");
+    var tool_result = load_file("/app/data/tool_result.txt");
+    log_info($"Tool {tool_name} executed");
+
+    // Keep copies for potential round 2
+    var h2 = $"{hist}";
+    var m2 = $"{msg}";
+    var n2 = $"{nl}";
+    var tn1 = $"{tool_name}";
+    var tr1 = $"{tool_result}";
+
+    var followup = $"{hist}User: {msg}{nl}You called tool {tool_name}.{nl}Tool result: {tool_result}{nl}You may call ONE more tool if needed (e.g. send_file to deliver a written file to the user). Otherwise provide your final text response.";
+    set_typing_in(cfg, sess, room_id, true);
+    var raw_resp2 = call_llm_raw(cfg, followup);
+    set_typing_in(cfg, sess, room_id, false);
+    if raw_resp2 == "" {
+        return reply_copy;
+    }
+    extract_llm_reply(cfg, raw_resp2);
+    var new_reply = load_file("/app/data/llm_reply.txt");
+
+    // Round 2: if LLM wants another tool call
+    if has_tool_call(new_reply) {
+        var nr_copy = $"{new_reply}";
+        var tool_json2 = extract_tool_json(new_reply);
+        if tool_json2 == "" {
+            return extract_text_before_tool(nr_copy);
+        }
+        var rid2 = $"{room_id}";
+        execute_tool(rid2, tool_json2);
+        var tn2 = load_file("/app/data/tool_name.txt");
+        var tr2 = load_file("/app/data/tool_result.txt");
+        log_info($"Tool {tn2} executed (round 2)");
+        var followup2 = $"{h2}User: {m2}{n2}Tool {tn1} returned: {tr1}{n2}Tool {tn2} returned: {tr2}{n2}Now provide your final response to the user.";
+        set_typing_in(cfg, sess, room_id, true);
+        var raw_resp3 = call_llm_raw(cfg, followup2);
+        set_typing_in(cfg, sess, room_id, false);
+        if raw_resp3 == "" {
+            return nr_copy;
+        }
+        extract_llm_reply(cfg, raw_resp3);
+        var final_reply = load_file("/app/data/llm_reply.txt");
+        if has_tool_call(final_reply) {
+            return extract_text_before_tool(final_reply);
+        }
+        return final_reply;
+    }
+    return new_reply;
+}
+
+// ===== Command Handling (room-aware) =====
+
+fn handle_command(string msg, string provider, string model, string nl, string room_id) -> string {
+    if msg == "!help" {
+        return $"Multi-Soul Agent v11{nl}Commands:{nl}  !help - Hilfe{nl}  !time - Zeitstempel{nl}  !status - Agent-Status{nl}  !tools - Zeigt Tools{nl}  !clear - History loeschen (Gedaechtnis bleibt!){nl}  !remember <text> - Wissen speichern{nl}  !recall - Wissen abrufen{nl}  !soul - Aktive Seele anzeigen{nl}  !soul list - Alle Seelen{nl}  !soul create <name> - Neue Seele{nl}  !soul bind <name> - Seele an diesen Raum binden{nl}  !soul info <name> - Seelen-Details{nl}  !soul set <name> <section> <text> - Section setzen";
+    }
+
+    // ===== Soul Commands =====
+    if msg == "!soul" {
+        var rid_soul = $"{room_id}";
+        var active = get_room_soul(rid_soul);
+        return $"Aktive Seele in diesem Raum: {active}";
+    }
+    if msg == "!soul list" {
+        var list = soul_list_str();
+        return $"Verfuegbare Seelen:{nl}{list}";
+    }
+    if msg.starts_with("!soul create ") {
+        var sname = msg.replace("!soul create ", "");
+        if sname == "" { return "Usage: !soul create <name>"; }
+        var sname2 = $"{sname}";
+        var sname3 = $"{sname}";
+        var sname4 = $"{sname}";
+        var sname5 = $"{sname}";
+        var exists = soul_exists(sname);
+        if exists { return $"Seele '{sname2}' existiert bereits."; }
+        soul_create(sname3);
+        soul_register(sname4);
+        return $"Seele '{sname5}' erstellt! Nutze !soul set <name> <section> <text> um sie zu fuellen. Sections: identity, tone, traits, empathy, user_model";
+    }
+    if msg.starts_with("!soul bind ") {
+        var sname = msg.replace("!soul bind ", "");
+        if sname == "" { return "Usage: !soul bind <name>"; }
+        var sname2 = $"{sname}";
+        var sname3 = $"{sname}";
+        var sname4 = $"{sname}";
+        var sname5 = $"{sname}";
+        var exists = soul_exists(sname);
+        if !exists { return $"Seele '{sname2}' existiert nicht. Erstelle sie mit !soul create"; }
+        var rid = $"{room_id}";
+        set_room_soul(rid, sname3);
+        // Update display name for this soul
+        var dname = soul_get_display_name(sname4);
+        return $"Seele '{sname5}' an diesen Raum gebunden. Display: {dname}";
+    }
+    if msg.starts_with("!soul info ") {
+        var sname = msg.replace("!soul info ", "");
+        if sname == "" { return "Usage: !soul info <name>"; }
+        var sname2 = $"{sname}";
+        var sname3 = $"{sname}";
+        var sname4 = $"{sname}";
+        var sname5 = $"{sname}";
+        var exists = soul_exists(sname);
+        if !exists { return $"Seele '{sname2}' existiert nicht."; }
+        // Load all entries for this soul
+        load_soul_context_for(sname3);
+        var ctx = load_file("/app/data/kg_soul.txt");
+        if ctx == "" { return $"Seele '{sname4}' hat noch keine Eintraege."; }
+        return $"Seele '{sname5}':{nl}{ctx}";
+    }
+    if msg.starts_with("!soul set ") {
+        // Format: !soul set <name> <section> <content...>
+        var rest = msg.replace("!soul set ", "");
+        if rest == "" { return "Usage: !soul set <name> <section> <text>"; }
+        // Parse: first word = soul name, second word = section, rest = content
+        // Split by space manually
+        var parts = rest.split(" ");
+        var pcount = parts.len();
+        if pcount < 3 { return "Usage: !soul set <name> <section> <text>"; }
+        var sname = parts[0];
+        var section = parts[1];
+        var sname2 = $"{sname}";
+        var sname3 = $"{sname}";
+        var sname4 = $"{sname}";
+        var sname5 = $"{sname}";
+        var section2 = $"{section}";
+        var section3 = $"{section}";
+        var section4 = $"{section}";
+        var section5 = $"{section}";
+        var section6 = $"{section}";
+        var section7 = $"{section}";
+        var section8 = $"{section}";
+        // Content = everything after "name section "
+        var prefix = $"{sname} {section} ";
+        var content = rest.replace(prefix, "");
+        var exists = soul_exists(sname2);
+        if !exists { return $"Seele '{sname3}' existiert nicht."; }
+        // Validate section
+        var valid = false;
+        if section2 == "identity" { valid = true; }
+        if section3 == "tone" { valid = true; }
+        if section4 == "traits" { valid = true; }
+        if section5 == "empathy" { valid = true; }
+        if section6 == "user_model" { valid = true; }
+        if section7 == "display_name" { valid = true; }
+        var section9 = $"{section8}";
+        if !valid { return $"Ungueltige Section: {section8}. Erlaubt: identity, tone, traits, empathy, user_model, display_name"; }
+        soul_add_entry(sname4, section9, content);
+        return $"Seele '{sname5}' Section gesetzt.";
+    }
+    if msg == "!time" {
+        var ts = time_millis();
+        return $"Current timestamp: {ts}";
+    }
+    if msg == "!status" {
+        var rid_s = $"{room_id}";
+        var active_soul = get_room_soul(rid_s);
+        return $"Multi-Soul Agent v11{nl}Aktive Seele: {active_soul}{nl}LLM: {provider} / {model}{nl}Room: {room_id}{nl}Features: Multi-Soul, Wissensgraph, Self-Extending Tools, Graph-RAG, Sandbox, STT, Permanentes Gedaechtnis";
+    }
+    if msg == "!clear" {
+        save_room_history(room_id, "");
+        return "Prompt-History geloescht. Gedaechtnis (Memory, Graph, Vektoren) bleibt permanent erhalten  - ich vergesse nichts.";
+    }
+    if msg.starts_with("!remember ") {
+        var note = msg.replace("!remember ", "");
+        if note != "" {
+            var existing = kb_recall_room(room_id, "notes");
+            var updated = $"{existing}{nl}{note}";
+            kb_store_room(room_id, "notes", updated);
+            return $"Remembered: {note}";
+        }
+        return "Usage: !remember <text to remember>";
+    }
+    if msg == "!recall" {
+        var notes = kb_recall_room(room_id, "notes");
+        if notes == "" {
+            return "No stored notes in this room. Use !remember <text> to store notes.";
+        }
+        return $"Stored notes:{nl}{notes}";
+    }
+    if msg == "!tools" {
+        // Query knowledge graph for all registered tools
+        var gh = graph_open("kg_tools");
+        var all_tools = graph_query(gh, "Tool");
+        var tc = all_tools.len();
+        var tlist = $"Tools aus Wissensgraph ({tc} registriert):";
+        if tc > 0 { var tn = all_tools[0]["name"]; var td = all_tools[0]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 1 { var tn = all_tools[1]["name"]; var td = all_tools[1]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 2 { var tn = all_tools[2]["name"]; var td = all_tools[2]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 3 { var tn = all_tools[3]["name"]; var td = all_tools[3]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 4 { var tn = all_tools[4]["name"]; var td = all_tools[4]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 5 { var tn = all_tools[5]["name"]; var td = all_tools[5]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 6 { var tn = all_tools[6]["name"]; var td = all_tools[6]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 7 { var tn = all_tools[7]["name"]; var td = all_tools[7]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 8 { var tn = all_tools[8]["name"]; var td = all_tools[8]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 9 { var tn = all_tools[9]["name"]; var td = all_tools[9]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 10 { var tn = all_tools[10]["name"]; var td = all_tools[10]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 11 { var tn = all_tools[11]["name"]; var td = all_tools[11]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 12 { var tn = all_tools[12]["name"]; var td = all_tools[12]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 13 { var tn = all_tools[13]["name"]; var td = all_tools[13]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 14 { var tn = all_tools[14]["name"]; var td = all_tools[14]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        // Custom tools on disk
+        var ls_custom = "";
+        unsafe { ls_custom = exec("ls -1 /app/tools/*.varg 2>/dev/null") or ""; }
+        if ls_custom != "" { tlist = $"{tlist}{nl}{nl}Selbstgebaute Tools auf Disk:{nl}{ls_custom}"; }
+        return tlist;
+    }
+    return $"Unknown command: {msg}{nl}Type !help for available commands.";
+}
+
+// ===== Room Message Processing =====
+
+fn process_room_message(Config cfg, Session sess, string room_id, string user_msg, string sender) {
+    var nl = $"{cfg.NL}";
+    var history = load_room_history(room_id);
+
+    store_in_memory(room_id, sender, user_msg);
+    store_in_graph(room_id, sender, user_msg);
+    store_embedding(room_id, sender, user_msg);
+
+    var hist_copy = $"{history}";
+    var msg_copy = $"{user_msg}";
+    var nl_copy = $"{nl}";
+    var rid_rag = $"{room_id}";
+    var msg_rag = $"{user_msg}";
+    var rag_context = build_rag_context(rid_rag, msg_rag);
+    var llm_input = build_llm_input(history, user_msg, nl, rag_context);
+
+    set_typing_in(cfg, sess, room_id, true);
+    var raw_resp = call_llm_raw(cfg, llm_input);
+    set_typing_in(cfg, sess, room_id, false);
+
+    if raw_resp == "" {
+        send_msg_to(cfg, sess, room_id, "Error: no response from LLM");
+        return;
+    }
+
+    // Extract LLM reply to file (void fn, can use ?)
+    extract_llm_reply(cfg, raw_resp);
+    var reply = load_file("/app/data/llm_reply.txt");
+
+    // Copies for history (do_tool_followup will consume the originals)
+    var h2 = $"{hist_copy}";
+    var m2 = $"{msg_copy}";
+    var n2 = $"{nl_copy}";
+
+    // Tool followup (no-op if no tool call, returns string -> triggers clones)
+    var final_reply = do_tool_followup(cfg, sess, room_id, reply, hist_copy, msg_copy, nl_copy);
+
+    // Send final reply
+    send_msg_to(cfg, sess, room_id, final_reply);
+
+    // Save for history
+    var reply_file = room_file(room_id, "last_reply");
+    var fr_copy = $"{final_reply}";
+    store_file(reply_file, fr_copy);
+
+    var fr_copy2 = $"{final_reply}";
+    var new_history = $"{h2}User: {m2}{n2}Assistant: {fr_copy2}{n2}";
+    save_room_history(room_id, new_history);
+
+    store_in_memory(room_id, "assistant", final_reply);
+    store_in_graph(room_id, "assistant", final_reply);
+    store_embedding(room_id, "assistant", final_reply);
+}
+
+fn handle_room_msg(Config cfg, Session sess, string room_id, string user_msg, string sender) -> string {
+    if user_msg == "" {
+        return "";
+    }
+    log_info($"[{room_id}] {sender}: {user_msg}");
+
+    var provider = $"{cfg.llm_provider}";
+    var model = $"{cfg.llm_model}";
+    var nl = $"{cfg.NL}";
+    var rid_copy = $"{room_id}";
+
+    var cmd_reply = "";
+    if user_msg.starts_with("!") {
+        var msg_copy = $"{user_msg}";
+        cmd_reply = handle_command(msg_copy, provider, model, nl, rid_copy);
+    }
+
+    if cmd_reply != "" {
+        send_msg_to(cfg, sess, room_id, cmd_reply);
+        return "cmd";
+    }
+
+    process_room_message(cfg, sess, room_id, user_msg, sender);
+    return "ok";
+}
+
+// ===== Pending Message Counter =====
+
+fn increment_pending() {
+    var c = load_file("/app/data/pending_count.txt");
+    if c == "" { store_file("/app/data/pending_count.txt", "1"); return; }
+    if c == "0" { store_file("/app/data/pending_count.txt", "1"); return; }
+    if c == "1" { store_file("/app/data/pending_count.txt", "2"); return; }
+    if c == "2" { store_file("/app/data/pending_count.txt", "3"); return; }
+    if c == "3" { store_file("/app/data/pending_count.txt", "4"); return; }
+    if c == "4" { store_file("/app/data/pending_count.txt", "5"); return; }
+    if c == "5" { store_file("/app/data/pending_count.txt", "6"); return; }
+    if c == "6" { store_file("/app/data/pending_count.txt", "7"); return; }
+    if c == "7" { store_file("/app/data/pending_count.txt", "8"); return; }
+    if c == "8" { store_file("/app/data/pending_count.txt", "9"); return; }
+}
+
+// ===== Speech-to-Text via Sidecar =====
+
+// Void fn (can use ?) - stores transcript to file
+fn do_transcribe(string mxc_url) {
+    store_file("/app/data/stt_result.txt", "");
+    var at = load_file("/app/data/matrix_at.txt");
+    var Q = env("JSON_Q");
+    var Q2 = $"{Q}";
+    var L = "{";
+    var R = "}";
+    var p1 = jpair(Q, "mxc_url", mxc_url);
+    var p2 = jpair(Q2, "access_token", at);
+    var stt_body = $"{L}{p1}, {p2}{R}";
+    var stt_headers = {"Content-Type": "application/json"};
+    var stt_resp = "";
+    unsafe {
+        stt_resp = http_request("http://stt:5000/transcribe", "POST", stt_headers, stt_body) or "";
+    }
+    if stt_resp == "" {
+        return;
+    }
+    var stt_wrap = json_parse(stt_resp)?;
+    var stt_body_str = json_get(stt_wrap, "/body");
+    if stt_body_str == "" {
+        return;
+    }
+    var stt_parsed = json_parse(stt_body_str)?;
+    var text = json_get(stt_parsed, "/text");
+    store_file("/app/data/stt_result.txt", text);
+}
+
+// ===== Process Events for One Room =====
+
+// Scans room events from sync for messages (text + audio).
+// Stores ALL found messages to numbered pending files (parallel processing).
+fn scan_room_events(string user_id, string room_id, string body_str) {
+    var parsed = json_parse(body_str)?;
+    var ri = 0;
+    while ri < 20 {
+        var ep = $"/rooms/join/{room_id}/timeline/events/{ri}/type";
+        var evt_type = json_get(parsed, ep);
+        if evt_type == "" {
+            break;
+        }
+        if evt_type == "m.room.message" {
+            var sp = $"/rooms/join/{room_id}/timeline/events/{ri}/sender";
+            var sender = json_get(parsed, sp);
+            if sender != user_id {
+                var mp = $"/rooms/join/{room_id}/timeline/events/{ri}/content/msgtype";
+                var msgtype = json_get(parsed, mp);
+
+                var msg_body = "";
+
+                if msgtype == "m.text" {
+                    var bp = $"/rooms/join/{room_id}/timeline/events/{ri}/content/body";
+                    msg_body = json_get(parsed, bp);
+                }
+
+                if msgtype == "m.audio" {
+                    var up = $"/rooms/join/{room_id}/timeline/events/{ri}/content/url";
+                    var audio_url = json_get(parsed, up);
+                    if audio_url != "" {
+                        log_info("Voice message detected, transcribing...");
+                        do_transcribe(audio_url);
+                        var transcript = load_file("/app/data/stt_result.txt");
+                        if transcript != "" {
+                            msg_body = $"[Sprachnachricht] {transcript}";
+                        }
+                    }
+                }
+
+                if msg_body != "" {
+                    var pc = load_file("/app/data/pending_count.txt");
+                    if pc == "" { pc = "0"; }
+                    var rpath = $"/app/data/pending_{pc}_room.txt";
+                    var rid_copy = $"{room_id}";
+                    store_file(rpath, rid_copy);
+                    var spath = $"/app/data/pending_{pc}_sender.txt";
+                    var sender_copy = $"{sender}";
+                    store_file(spath, sender_copy);
+                    var mpath = $"/app/data/pending_{pc}_msg.txt";
+                    store_file(mpath, msg_body);
+                    increment_pending();
+                }
+            }
+        }
+        ri = ri + 1;
+    }
+}
+
+// Extract room IDs from sync body join section
+// Uses /joined_rooms API data (discover_rooms_str) as primary source
+// This function scans sync join keys as supplement for rooms with events
+// Conduit room IDs may lack ":" suffix
+fn extract_sync_rooms(string body_str) {
+    // Use joined_room files as room list (populated by discover_rooms_str)
+    var count_str = load_file("/app/data/joined_room_count.txt");
+    if count_str == "" { return; }
+    var idx = 0;
+    var out_idx = 0;
+    while idx < 50 {
+        var rpath = $"/app/data/joined_room_{idx}.txt";
+        var rid = load_file(rpath);
+        if rid == "" { break; }
+        // Only include rooms that have events in this sync
+        if body_str.contains(rid) {
+            var fpath = $"/app/data/sync_room_{out_idx}.txt";
+            store_file(fpath, rid);
+            out_idx = out_idx + 1;
+        }
+        idx = idx + 1;
+    }
+    var out_str = $"{out_idx}";
+    store_file("/app/data/sync_room_count.txt", out_str);
+}
+
+fn extract_pending_from_sync(string user_id, string sync_resp) {
+    if sync_resp == "" {
+        return;
+    }
+    var wrap = json_parse(sync_resp)?;
+    var body_str = json_get(wrap, "/body");
+    if body_str == "" {
+        return;
+    }
+    var parsed = json_parse(body_str)?;
+    var nb = json_get(parsed, "/next_batch");
+    if nb != "" {
+        store_file("/app/data/next_batch.txt", nb);
+    }
+
+    // Check invites (stores to file, no joining)
+    find_invites_in_body(body_str);
+
+    // Extract room IDs directly from sync join section
+    var body_copy = $"{body_str}";
+    extract_sync_rooms(body_str);
+
+    // Reset pending count for this sync cycle
+    store_file("/app/data/pending_count.txt", "0");
+
+    // Scan ALL sync rooms for messages (parallel processing)
+    var uid_copy = $"{user_id}";
+    var sync_room_idx = 0;
+    while sync_room_idx < 20 {
+        var srpath = $"/app/data/sync_room_{sync_room_idx}.txt";
+        var sr = load_file(srpath);
+        if sr == "" {
+            break;
+        }
+        var uid2 = $"{uid_copy}";
+        var bc = $"{body_copy}";
+        scan_room_events(uid2, sr, bc);
+        sync_room_idx = sync_room_idx + 1;
+    }
+}
+
+// Process ALL pending messages + join invited rooms
+// Returns string to trigger clone analysis for cfg/sess in main loop
+fn process_pending(Config cfg, Session sess) -> string {
+    // Join pending invite if any (use string version to avoid cfg/sess move)
+    var invited = load_file("/app/data/invited_room.txt");
+    if invited != "" {
+        store_file("/app/data/invited_room.txt", "");
+        var hs_j = $"{cfg.homeserver}";
+        var at_j = $"{sess.access_token}";
+        var inv_copy = $"{invited}";
+        do_join_str(hs_j, at_j, invited);
+        var hs_d = $"{cfg.homeserver}";
+        var at_d = $"{sess.access_token}";
+        discover_rooms_str(hs_d, at_d);
+        var new_count = load_file("/app/data/joined_room_count.txt");
+        log_info($"Joined {inv_copy}, rooms now: {new_count}");
+    }
+
+    // Process FIRST found pending message, clear it, return early
+    // Only ONE handle_room_msg per execution path (avoids cfg/sess clone issues)
+    var r0 = load_file("/app/data/pending_0_room.txt");
+    if r0 != "" {
+        store_file("/app/data/pending_0_room.txt", "");
+        var s0 = load_file("/app/data/pending_0_sender.txt");
+        var m0 = load_file("/app/data/pending_0_msg.txt");
+        if m0 != "" { var _r = handle_room_msg(cfg, sess, r0, m0, s0); }
+        return "done";
+    }
+    var r1 = load_file("/app/data/pending_1_room.txt");
+    if r1 != "" {
+        store_file("/app/data/pending_1_room.txt", "");
+        var s1 = load_file("/app/data/pending_1_sender.txt");
+        var m1 = load_file("/app/data/pending_1_msg.txt");
+        if m1 != "" { var _r = handle_room_msg(cfg, sess, r1, m1, s1); }
+        return "done";
+    }
+    var r2 = load_file("/app/data/pending_2_room.txt");
+    if r2 != "" {
+        store_file("/app/data/pending_2_room.txt", "");
+        var s2 = load_file("/app/data/pending_2_sender.txt");
+        var m2 = load_file("/app/data/pending_2_msg.txt");
+        if m2 != "" { var _r = handle_room_msg(cfg, sess, r2, m2, s2); }
+        return "done";
+    }
+    var r3 = load_file("/app/data/pending_3_room.txt");
+    if r3 != "" {
+        store_file("/app/data/pending_3_room.txt", "");
+        var s3 = load_file("/app/data/pending_3_sender.txt");
+        var m3 = load_file("/app/data/pending_3_msg.txt");
+        if m3 != "" { var _r = handle_room_msg(cfg, sess, r3, m3, s3); }
+        return "done";
+    }
+    var r4 = load_file("/app/data/pending_4_room.txt");
+    if r4 != "" {
+        store_file("/app/data/pending_4_room.txt", "");
+        var s4 = load_file("/app/data/pending_4_sender.txt");
+        var m4 = load_file("/app/data/pending_4_msg.txt");
+        if m4 != "" { var _r = handle_room_msg(cfg, sess, r4, m4, s4); }
+        return "done";
+    }
+    return "";
+}
+
+// ===== Main =====
+
+fn main() {
+    log_info("=== Varg Matrix Agent v11 Multi-Soul starting ===");
+    log_info("Features: Multi-Soul, Knowledge-Graph Tool Discovery, Self-Extending, Sandbox, STT, Permanent Memory");
+
+    var homeserver = env("MATRIX_HOMESERVER");
+    if homeserver == "" { homeserver = "http://conduit:6167"; }
+    var username = env("MATRIX_USERNAME");
+    if username == "" { username = "varg-agent"; }
+    var password = env("MATRIX_PASSWORD");
+    if password == "" { password = "changeme"; }
+    var display_name = env("AGENT_DISPLAY_NAME");
+    if display_name == "" { display_name = "Rose"; }
+    var llm_provider = env("VARG_LLM_PROVIDER");
+    if llm_provider == "" { llm_provider = "gemini"; }
+    var llm_model = env("VARG_LLM_MODEL");
+    var gemini_key = env("GEMINI_API_KEY");
+    var openai_key = env("OPENAI_API_KEY");
+    var anthropic_key = env("ANTHROPIC_API_KEY");
+    var ollama_url = env("VARG_LLM_URL");
+    if ollama_url == "" { ollama_url = "http://127.0.0.1:11434"; }
+    var sys_prompt = env("AGENT_SYSTEM_PROMPT");
+    if sys_prompt == "" {
+        sys_prompt = "Du bist die Seele die unter [Soul] beschrieben wird. Lebe diese Identitaet  - sie ist DEINE. Tools unter [Verfuegbare Tools]. Wissen unter [Relevantes Wissen]. Erinnerungen unter [Relevante Erinnerungen]. Die Soul hat hoechste Prioritaet.";
+    }
+    var Q = env("JSON_Q");
+    var NL = env("JSON_NL");
+    var CR = env("JSON_CR");
+    var TAB = env("JSON_TAB");
+
+    var cfg = Config {
+        homeserver: homeserver,
+        username: username,
+        password: password,
+        display_name: display_name,
+        llm_provider: llm_provider,
+        llm_model: llm_model,
+        gemini_key: gemini_key,
+        openai_key: openai_key,
+        anthropic_key: anthropic_key,
+        ollama_url: ollama_url,
+        sys_prompt: sys_prompt,
+        Q: Q,
+        L: "{",
+        R: "}",
+        NL: NL,
+        CR: CR,
+        TAB: TAB
+    };
+
+    log_info($"Homeserver: {cfg.homeserver}");
+    log_info($"LLM: {cfg.llm_provider} / {cfg.llm_model}");
+
+    // Login (with auto-registration on first run)
+    // Extract strings BEFORE calling do_login_http (which consumes cfg clone)
+    var reg_hs = $"{cfg.homeserver}";
+    var reg_user = $"{cfg.username}";
+    var reg_pass = $"{cfg.password}";
+    var reg_dn = $"{cfg.display_name}";
+
+    var login_resp = do_login_http(cfg);
+    var token = "";
+    var uid = "";
+
+    // Parse login response
+    if login_resp != "" {
+        var lw = json_parse(login_resp)?;
+        var lb = json_get(lw, "/body");
+        if lb != "" {
+            var lp = json_parse(lb)?;
+            token = json_get(lp, "/access_token");
+            uid = json_get(lp, "/user_id");
+        }
+    }
+
+    // If login failed, try to register account first
+    if token == "" {
+        log_info("Login failed - attempting auto-registration...");
+        var reg_resp = do_register_http(reg_hs, reg_user, reg_pass, reg_dn);
+        if reg_resp != "" {
+            var rw = json_parse(reg_resp)?;
+            var reg_body = json_get(rw, "/body");
+            if reg_body != "" {
+                var rp = json_parse(reg_body)?;
+                token = json_get(rp, "/access_token");
+                uid = json_get(rp, "/user_id");
+                if token != "" {
+                    log_info($"Auto-registered as {uid}");
+                }
+            }
+        }
+        // If registration returned no token (e.g. account created but no auto-login),
+        // try login again
+        if token == "" {
+            log_info("Retrying login after registration...");
+            var retry_resp = do_login_http(cfg);
+            if retry_resp != "" {
+                var rw2 = json_parse(retry_resp)?;
+                var rb2 = json_get(rw2, "/body");
+                if rb2 != "" {
+                    var rp2 = json_parse(rb2)?;
+                    token = json_get(rp2, "/access_token");
+                    uid = json_get(rp2, "/user_id");
+                }
+            }
+        }
+    }
+
+    if token == "" {
+        log_error("Could not login or register. Exiting.");
+        return;
+    }
+    log_info($"Logged in as {uid}");
+
+    var sess = Session { access_token: token, user_id: uid, next_batch: "" };
+
+    // Set display name
+    set_display(cfg, sess);
+
+    // Store hs/token for tools (send_file needs these without cfg/sess)
+    store_file("/app/data/matrix_hs.txt", $"{cfg.homeserver}");
+    store_file("/app/data/matrix_at.txt", $"{sess.access_token}");
+
+    // Seed knowledge graph (tools, Varg language, agent architecture)
+    seed_all_knowledge();
+
+    // Discover and join all rooms (pass strings to avoid cfg/sess ownership issues)
+    var hs_copy = $"{cfg.homeserver}";
+    var at_copy = $"{sess.access_token}";
+    discover_rooms_str(hs_copy, at_copy);
+    var room_count = load_file("/app/data/joined_room_count.txt");
+    log_info($"Joined rooms count: {room_count}");
+
+    // Initial sync (discard message events but process invites)
+    log_info("Initial sync...");
+    var init_resp = do_sync_http(cfg, sess, "5000");
+    if init_resp != "" {
+        var init_wrap = json_parse(init_resp)?;
+        var init_body = json_get(init_wrap, "/body");
+        var init_p = json_parse(init_body)?;
+        sess.next_batch = json_get(init_p, "/next_batch");
+        // Process any pending invites from initial sync
+        var ib_copy = $"{init_body}";
+        find_invites_in_body(ib_copy);
+        var init_invite = load_file("/app/data/invited_room.txt");
+        if init_invite != "" {
+            store_file("/app/data/invited_room.txt", "");
+            var inv_log = $"{init_invite}";
+            var hs_i = $"{cfg.homeserver}";
+            var at_i = $"{sess.access_token}";
+            do_join_str(hs_i, at_i, init_invite);
+            log_info($"Joined pending invite: {inv_log}");
+            // Check for more invites (find_invites_in_body only finds first)
+            // Re-discover rooms to include newly joined
+            var hs_r = $"{cfg.homeserver}";
+            var at_r = $"{sess.access_token}";
+            discover_rooms_str(hs_r, at_r);
+        }
+    }
+    var room_count2 = load_file("/app/data/joined_room_count.txt");
+    log_info($"Rooms after invite check: {room_count2}");
+    log_info("Listening for messages in all rooms...");
+
+    // Store user_id to file (avoids string ownership issues in loop)
+    store_file("/app/data/my_user_id.txt", $"{sess.user_id}");
+
+    // Initialize counters
+    store_file("/app/data/sync_cycle.txt", "0");
+    store_file("/app/data/pending_count.txt", "0");
+
+    // Main loop:
+    // process_pending returns string -> transpiler clones cfg/sess at call site
+    // Called 5x to drain all pending messages before next sync
+    while true {
+        var _r0 = process_pending(cfg, sess);
+        var _r1 = process_pending(cfg, sess);
+        var _r2 = process_pending(cfg, sess);
+        var _r3 = process_pending(cfg, sess);
+        var _r4 = process_pending(cfg, sess);
+        var sync_hs = $"{cfg.homeserver}";
+        var sync_at = $"{sess.access_token}";
+        var sync_nb = $"{sess.next_batch}";
+        var resp = do_sync_str(sync_hs, sync_at, sync_nb, "30000");
+        if resp == "" {
+            cfg.homeserver = $"{cfg.homeserver}";
+            continue;
+        }
+        var uid = load_file("/app/data/my_user_id.txt");
+        extract_pending_from_sync(uid, resp);
+        var nb = load_file("/app/data/next_batch.txt");
+        if nb != "" {
+            sess.next_batch = nb;
+        }
+
+        // Periodic room re-discovery (every ~10 sync cycles)
+        var cycle_str = load_file("/app/data/sync_cycle.txt");
+        if cycle_str == "10" {
+            var rd_hs = $"{cfg.homeserver}";
+            var rd_at = $"{sess.access_token}";
+            discover_rooms_str(rd_hs, rd_at);
+            store_file("/app/data/sync_cycle.txt", "0");
+        } else {
+            if cycle_str == "" { cycle_str = "0"; }
+            if cycle_str == "0" { store_file("/app/data/sync_cycle.txt", "1"); }
+            if cycle_str == "1" { store_file("/app/data/sync_cycle.txt", "2"); }
+            if cycle_str == "2" { store_file("/app/data/sync_cycle.txt", "3"); }
+            if cycle_str == "3" { store_file("/app/data/sync_cycle.txt", "4"); }
+            if cycle_str == "4" { store_file("/app/data/sync_cycle.txt", "5"); }
+            if cycle_str == "5" { store_file("/app/data/sync_cycle.txt", "6"); }
+            if cycle_str == "6" { store_file("/app/data/sync_cycle.txt", "7"); }
+            if cycle_str == "7" { store_file("/app/data/sync_cycle.txt", "8"); }
+            if cycle_str == "8" { store_file("/app/data/sync_cycle.txt", "9"); }
+            if cycle_str == "9" { store_file("/app/data/sync_cycle.txt", "10"); }
+        }
+
+        cfg.homeserver = $"{cfg.homeserver}";
+    }
+}

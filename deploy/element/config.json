@@ -1,8 +1,8 @@
 {
     "default_server_config": {
         "m.homeserver": {
-            "base_url": "HOMESERVER_URL_PLACEHOLDER",
-            "server_name": "SERVER_NAME_PLACEHOLDER"
+            "base_url": "https://matrix.lupusmalus.dev",
+            "server_name": "matrix.lupusmalus.dev"
         }
     },
     "brand": "Varg Agent Chat",
@@ -13,7 +13,7 @@
         "servers": []
     },
     "enable_presence_by_hs_url": {
-        "HOMESERVER_URL_PLACEHOLDER": true
+        "https://matrix.lupusmalus.dev": true
     },
     "setting_defaults": {
         "breadcrumbs": true
