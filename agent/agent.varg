@@ -1,8 +1,8 @@
 // =============================================================================
-// Varg Matrix Chat Agent - v11 "Multi-Soul"
-// Features: Multi-Soul System (per-room personality binding), Knowledge-Graph-Driven
-//           Tool Discovery, Self-Knowledge, Self-Extending Tools, Multi-Room,
-//           Graph-RAG, Embeddings, STT, Sandbox, Git Clone, Permanent Memory
+// Varg Matrix Chat Agent - v12 "Alltags-Assistent"
+// Features: Multi-Soul System, Knowledge-Graph Tools, Self-Extending, Multi-Room,
+//           Graph-RAG, STT, Sandbox, Git Clone, Permanent Memory,
+//           Web Search, URL Fetch, Image Analysis (Gemini Vision), Reminders, PDF Gen
 // Constraints: $"..." for borrows, ? only in void fns, env vars for special chars
 // =============================================================================
 
@@ -352,7 +352,7 @@ fn kg_seed_tool(string name, string desc, string args) {
 }
 
 fn kg_seed_knowledge(string title, string content, string category) {
-    var gh = graph_open("kg_self");
+    var gh = graph_open("kg_own");
     var t1 = $"{title}";
     var c1 = $"{content}";
     var cat1 = $"{category}";
@@ -361,7 +361,7 @@ fn kg_seed_knowledge(string title, string content, string category) {
     var cat2 = $"{category}";
     var props = {"title": t1, "content": c1, "category": cat1};
     graph_add_node(gh, "Knowledge", props);
-    var vh = vector_store_open("kg_self");
+    var vh = vector_store_open("kg_own");
     var search_text = $"{title}: {content}";
     var emb = embed(search_text);
     var doc_id = $"varg_{title}";
@@ -388,10 +388,10 @@ fn kg_register_custom_tool(string name, string desc, string code) {
     var meta = {"name": n2, "description": d2, "arguments": "custom", "custom": "true"};
     vector_store_upsert(vh, doc_id, emb, meta);
     // Store source code in varg knowledge
-    var gh2 = graph_open("kg_self");
+    var gh2 = graph_open("kg_own");
     var code_props = {"title": n3, "content": c1, "category": "custom_tool_source"};
     graph_add_node(gh2, "ToolSource", code_props);
-    var vh2 = vector_store_open("kg_self");
+    var vh2 = vector_store_open("kg_own");
     var code_search = $"Varg Tool {name}: {desc}";
     var code_emb = embed(code_search);
     var code_doc = $"toolsrc_{name}";
@@ -428,6 +428,10 @@ fn seed_all_knowledge() {
     kg_seed_tool("run_varg_tool", "Fuehrt ein selbst kompiliertes Varg-Tool aus", "name: Tool-Name, args: Argumente");
     kg_seed_tool("list_tools", "Zeigt alle verfuegbaren benutzerdefinierten Varg-Tools", "keine");
     kg_seed_tool("generate_pdf", "Generiert ein PDF-Dokument und sendet es im Chat. Perfekt fuer Berichte, Zusammenfassungen, Listen.", "title: Dokumenttitel, sections: Array von {heading, body} Abschnitten, filename?: Dateiname (Standard: document.pdf)");
+    kg_seed_tool("web_search", "Sucht im Internet nach aktuellen Informationen. Nutze dies fuer Wetter, Nachrichten, Fakten, alles was aktuelles Wissen braucht.", "query: Suchbegriff, max_results?: Anzahl Ergebnisse (Standard: 5)");
+    kg_seed_tool("fetch_url", "Ruft eine Webseite ab und extrahiert den Textinhalt. Nutze dies wenn der User einen Link schickt oder du Details zu einem Suchergebnis brauchst.", "url: Die abzurufende URL, max_chars?: Maximale Textlaenge (Standard: 8000)");
+    kg_seed_tool("analyze_image", "Analysiert ein Bild das der User im Chat geschickt hat. Beschreibt was auf dem Bild zu sehen ist.", "mxc_url: Die mxc:// URL des Bildes (aus der Nachricht), prompt?: Spezifische Frage zum Bild");
+    kg_seed_tool("set_reminder", "Setzt eine Erinnerung die nach einer bestimmten Zeit als Nachricht im Chat erscheint. Zeitangaben relativ in Minuten.", "minutes: Minuten bis zur Erinnerung, text: Erinnerungstext");
 
     // ===== Tool Relationships (Graph Edges) =====
     kg_add_tool_edge("git_clone", "enables", "read_repo_file");
@@ -437,6 +441,9 @@ fn seed_all_knowledge() {
     kg_add_tool_edge("read_file", "related", "write_file");
     kg_add_tool_edge("generate_pdf", "related", "write_file");
     kg_add_tool_edge("generate_pdf", "related", "send_file");
+    kg_add_tool_edge("web_search", "enables", "fetch_url");
+    kg_add_tool_edge("fetch_url", "related", "web_search");
+    kg_add_tool_edge("analyze_image", "related", "web_search");
 
     // ===== Varg Language Knowledge =====
     kg_seed_knowledge("Grundsyntax", "fn fuer Funktionen, var fuer Variablen, struct fuer Datenstrukturen. Typen: string, int, float, bool, map. String-Interpolation: $\"{variable}\". if/while/return wie C. Kein for-loop.", "syntax");
@@ -459,19 +466,19 @@ fn seed_all_knowledge() {
     kg_seed_knowledge("Agent Architektur", "Hauptloop: sync->extract_pending->process_pending(5x). Pro Nachricht: store_in_memory/graph/embedding, build_rag_context mit Tool-Discovery, build_llm_input, call_llm_raw, do_tool_followup(max 2 Runden), send_msg_to.", "architecture");
     kg_seed_knowledge("LLM Integration", "4 Provider: gemini, openai, anthropic, ollama. call_llm_raw dispatcht. System-Prompt + User-Input. Tool-Calls via XML: <tool_call>{...}</tool_call>. Max 2 Tool-Calls pro Nachricht.", "llm");
     kg_seed_knowledge("Matrix Integration", "Login via m.login.password. Sync mit next_batch und timeout. Messages via PUT m.room.message. Upload via /_matrix/media/v3/upload. Typing indicators. Room discovery ueber joined_rooms.", "matrix");
-    kg_seed_knowledge("Wissensgraph-Architektur", "Multi-Soul-System mit fuenf Domains nach Prioritaet: 1. souls (Multi-Soul Graph: pro Seele identity/tone/traits/empathy/user_model, per-Room Binding, eigener Matrix-Account), 2. kg_tools (Tool-Registry, Vektor-Suche), 3. kg_self (Selbstwissen: Varg-Sprache, Architektur, eigener Code, Vektor-Suche), 4. per-Room conv/vec/graph (permanentes Gespraechsgedaechtnis  - nie vergessen). Neue Tools automatisch in kg_tools registriert. Neue Seelen per !soul create.", "knowledge");
+    kg_seed_knowledge("Wissensgraph-Architektur", "Multi-Soul-System mit fuenf Domains nach Prioritaet: 1. souls (Multi-Soul Graph: pro Seele identity/tone/traits/empathy/user_model, per-Room Binding, eigener Matrix-Account), 2. kg_tools (Tool-Registry, Vektor-Suche), 3. kg_own (Selbstwissen: Varg-Sprache, Architektur, eigener Code, Vektor-Suche), 4. per-Room conv/vec/graph (permanentes Gespraechsgedaechtnis  - nie vergessen). Neue Tools automatisch in kg_tools registriert. Neue Seelen per !soul create.", "knowledge");
 
     // ===== Store agent source code reference =====
     var own_code = load_file("/app/agent.varg");
     if own_code != "" {
-        var vh = vector_store_open("kg_self");
+        var vh = vector_store_open("kg_own");
         var code_emb = embed("Varg Agent Quellcode Architektur Funktionen");
         var code_meta = {"title": "agent.varg", "content": "Kompletter Agent-Quellcode unter /app/agent.varg", "category": "source"};
         vector_store_upsert(vh, "agent_source", code_emb, code_meta);
     }
 
     store_file("/app/data/kg_version.txt", "v11");
-    log_info("Knowledge graph seeded: Multi-Soul + Tools + Self-Knowledge (souls, kg_tools, kg_self, per-room)");
+    log_info("Knowledge graph seeded: Multi-Soul + Tools + Self-Knowledge (souls, kg_tools, kg_own, per-room)");
 }
 
 // ===== Matrix HTTP =====
@@ -1118,8 +1125,8 @@ fn discover_tools(string user_msg) {
     store_file("/app/data/kg_tools.txt", ctx);
 }
 
-fn discover_self_knowledge(string user_msg) {
-    var vh = vector_store_open("kg_self");
+fn discover_own_knowledge(string user_msg) {
+    var vh = vector_store_open("kg_own");
     var emb = embed(user_msg);
     var results = vector_store_search(vh, emb, 3);
     var nl = env("JSON_NL");
@@ -1142,7 +1149,7 @@ fn discover_self_knowledge(string user_msg) {
         var line2 = $"{t2}: {c2}";
         ctx = $"{ctx}{nl}{line2}";
     }
-    store_file("/app/data/kg_self.txt", ctx);
+    store_file("/app/data/kg_own.txt", ctx);
 }
 
 // Build complete RAG context from all sources (room-specific + knowledge graph)
@@ -1160,7 +1167,7 @@ fn build_rag_context(string room_id, string user_msg) -> string {
     // 2. Tool discovery (vector search by relevance)
     discover_tools(msg3);
     // 3. Self-knowledge discovery (Varg language + architecture)
-    discover_self_knowledge(msg4);
+    discover_own_knowledge(msg4);
     // 4. Room-specific RAG (episodic memory + vector similarity)
     recall_memory_context(rid1, msg1);
     search_vector_context(rid2, msg2);
@@ -1168,7 +1175,7 @@ fn build_rag_context(string room_id, string user_msg) -> string {
     // Collect all results - priority order: Soul > Tools > Self > Memory > Vectors
     var soul_ctx = load_file("/app/data/kg_soul.txt");
     var tools_ctx = load_file("/app/data/kg_tools.txt");
-    var self_ctx = load_file("/app/data/kg_self.txt");
+    var own_ctx = load_file("/app/data/kg_own.txt");
     var mem_ctx = load_file("/app/data/rag_memory.txt");
     var vec_ctx = load_file("/app/data/rag_vector.txt");
     var nl = env("JSON_NL");
@@ -1182,9 +1189,9 @@ fn build_rag_context(string room_id, string user_msg) -> string {
         if rag != "" { rag = $"{rag}{nl}{nl}[Verfuegbare Tools]{nl}{tools_ctx}"; }
         else { rag = $"[Verfuegbare Tools]{nl}{tools_ctx}"; }
     }
-    if self_ctx != "" {
-        if rag != "" { rag = $"{rag}{nl}{nl}[Relevantes Wissen]{nl}{self_ctx}"; }
-        else { rag = $"[Relevantes Wissen]{nl}{self_ctx}"; }
+    if own_ctx != "" {
+        if rag != "" { rag = $"{rag}{nl}{nl}[Relevantes Wissen]{nl}{own_ctx}"; }
+        else { rag = $"[Relevantes Wissen]{nl}{own_ctx}"; }
     }
     if mem_ctx != "" {
         if rag != "" { rag = $"{rag}{nl}{nl}[Relevante Erinnerungen]{nl}{mem_ctx}"; }
@@ -1603,6 +1610,163 @@ fn execute_tool(string room_id, string tool_json) {
             }
         }
     }
+    if name == "web_search" {
+        var search_query = json_get(parsed, "/arguments/query");
+        if search_query == "" {
+            result = "Missing query parameter";
+        }
+        if search_query != "" {
+            var Q = env("JSON_Q");
+            var L = "{";
+            var R = "}";
+            var p1 = jpair(Q, "query", search_query);
+            var search_body = $"{L}{p1}{R}";
+            var search_headers = {"Content-Type": "application/json"};
+            var search_resp = "";
+            unsafe {
+                search_resp = http_request("http://stt:5000/web-search", "POST", search_headers, search_body) or "";
+            }
+            if search_resp == "" {
+                result = "Web search sidecar not reachable";
+            }
+            if search_resp != "" {
+                var sw = json_parse(search_resp)?;
+                var search_body = json_get(sw, "/body");
+                var sb_check = $"{search_body}";
+                if search_body != "" {
+                    result = search_body;
+                }
+                if sb_check == "" {
+                    result = "Search returned empty response";
+                }
+            }
+        }
+    }
+    if name == "fetch_url" {
+        var fetch_target = json_get(parsed, "/arguments/url");
+        if fetch_target == "" {
+            result = "Missing url parameter";
+        }
+        if fetch_target != "" {
+            var Q = env("JSON_Q");
+            var L = "{";
+            var R = "}";
+            var p1 = jpair(Q, "url", fetch_target);
+            var fetch_body = $"{L}{p1}{R}";
+            var fetch_headers = {"Content-Type": "application/json"};
+            var fetch_resp = "";
+            unsafe {
+                fetch_resp = http_request("http://stt:5000/fetch-url", "POST", fetch_headers, fetch_body) or "";
+            }
+            if fetch_resp == "" {
+                result = "Fetch sidecar not reachable";
+            }
+            if fetch_resp != "" {
+                var fw = json_parse(fetch_resp)?;
+                var fb = json_get(fw, "/body");
+                if fb != "" {
+                    var fp2 = json_parse(fb)?;
+                    var ftitle = json_get(fp2, "/title");
+                    var ftext = json_get(fp2, "/text");
+                    var ferr = json_get(fp2, "/error");
+                    if ferr != "" {
+                        result = $"Fetch error: {ferr}";
+                    }
+                    if ferr == "" {
+                        result = $"Title: {ftitle}\n\n{ftext}";
+                    }
+                }
+                if fb == "" {
+                    result = "Fetch returned empty response";
+                }
+            }
+        }
+    }
+    if name == "analyze_image" {
+        var img_mxc = json_get(parsed, "/arguments/mxc_url");
+        var img_prompt = json_get(parsed, "/arguments/prompt");
+        if img_prompt == "" { img_prompt = "Beschreibe dieses Bild detailliert auf Deutsch. Was siehst du?"; }
+        if img_mxc == "" {
+            result = "Missing mxc_url parameter";
+        }
+        if img_mxc != "" {
+            var at = load_file("/app/data/matrix_at.txt");
+            var Q = env("JSON_Q");
+            var L = "{";
+            var R = "}";
+            var p1 = jpair(Q, "mxc_url", img_mxc);
+            var p2 = jpair(Q, "access_token", at);
+            var p3 = jpair(Q, "prompt", img_prompt);
+            var img_body = $"{L}{p1}, {p2}, {p3}{R}";
+            var img_headers = {"Content-Type": "application/json"};
+            var img_resp = "";
+            unsafe {
+                img_resp = http_request("http://stt:5000/analyze-image", "POST", img_headers, img_body) or "";
+            }
+            if img_resp == "" {
+                result = "Image analysis sidecar not reachable";
+            }
+            if img_resp != "" {
+                var iw = json_parse(img_resp)?;
+                var ib = json_get(iw, "/body");
+                if ib != "" {
+                    var ip = json_parse(ib)?;
+                    var idesc = json_get(ip, "/description");
+                    var ierr = json_get(ip, "/error");
+                    if ierr != "" {
+                        result = $"Image analysis error: {ierr}";
+                    }
+                    if ierr == "" {
+                        result = idesc;
+                    }
+                }
+                if ib == "" {
+                    result = "Image analysis returned empty response";
+                }
+            }
+        }
+    }
+    if name == "set_reminder" {
+        var rem_minutes = json_get(parsed, "/arguments/minutes");
+        var rem_text = json_get(parsed, "/arguments/text");
+        if rem_text == "" { rem_text = "Erinnerung!"; }
+        if rem_minutes == "" { rem_minutes = "5"; }
+        // Convert minutes to sync cycles (~30s each)
+        var cycles = "10"; // default 5 min
+        if rem_minutes == "1" { cycles = "2"; }
+        if rem_minutes == "2" { cycles = "4"; }
+        if rem_minutes == "3" { cycles = "6"; }
+        if rem_minutes == "5" { cycles = "10"; }
+        if rem_minutes == "10" { cycles = "20"; }
+        if rem_minutes == "15" { cycles = "30"; }
+        if rem_minutes == "20" { cycles = "40"; }
+        if rem_minutes == "30" { cycles = "60"; }
+        if rem_minutes == "45" { cycles = "90"; }
+        if rem_minutes == "60" { cycles = "120"; }
+        if rem_minutes == "90" { cycles = "180"; }
+        if rem_minutes == "120" { cycles = "240"; }
+        var rid_rem = $"{room_id}";
+        var rem_idx = load_file("/app/data/reminder_count.txt");
+        if rem_idx == "" { rem_idx = "0"; }
+        var rem_due_path = $"/app/data/reminder_{rem_idx}_due.txt";
+        var rem_room_path = $"/app/data/reminder_{rem_idx}_room.txt";
+        var rem_text_path = $"/app/data/reminder_{rem_idx}_text.txt";
+        // Store cycle countdown directly (no parsing needed)
+        store_file(rem_due_path, cycles);
+        store_file(rem_room_path, rid_rem);
+        store_file(rem_text_path, rem_text);
+        // Increment reminder count
+        if rem_idx == "0" { store_file("/app/data/reminder_count.txt", "1"); }
+        if rem_idx == "1" { store_file("/app/data/reminder_count.txt", "2"); }
+        if rem_idx == "2" { store_file("/app/data/reminder_count.txt", "3"); }
+        if rem_idx == "3" { store_file("/app/data/reminder_count.txt", "4"); }
+        if rem_idx == "4" { store_file("/app/data/reminder_count.txt", "5"); }
+        if rem_idx == "5" { store_file("/app/data/reminder_count.txt", "6"); }
+        if rem_idx == "6" { store_file("/app/data/reminder_count.txt", "7"); }
+        if rem_idx == "7" { store_file("/app/data/reminder_count.txt", "8"); }
+        if rem_idx == "8" { store_file("/app/data/reminder_count.txt", "9"); }
+        result = $"Erinnerung gesetzt: '{rem_text}' in {rem_minutes} Minuten";
+    }
     if result == "" {
         result = $"Unknown tool: {name}";
     }
@@ -1989,6 +2153,14 @@ fn scan_room_events(string user_id, string room_id, string body_str) {
                     msg_body = json_get(parsed, bp);
                 }
 
+                if msgtype == "m.image" {
+                    var ip = $"/rooms/join/{room_id}/timeline/events/{ri}/content/url";
+                    var img_url = json_get(parsed, ip);
+                    if img_url != "" {
+                        msg_body = $"[Bild gesendet: {img_url}] Bitte analysiere dieses Bild.";
+                    }
+                }
+
                 if msgtype == "m.audio" {
                     var up = $"/rooms/join/{room_id}/timeline/events/{ri}/content/url";
                     var audio_url = json_get(parsed, up);
@@ -2151,11 +2323,77 @@ fn process_pending(Config cfg, Session sess) -> string {
     return "";
 }
 
+// ===== Reminder Tick (void, no structs, safe for transpiler) =====
+
+fn reminder_tick(string slot) {
+    var fpath = $"/app/data/reminder_{slot}_due.txt";
+    var val = load_file(fpath);
+    if val == "" { return; }
+    if val == "0" {
+        // Ready to fire: inject as pending message
+        var rpath = $"/app/data/reminder_{slot}_room.txt";
+        var tpath = $"/app/data/reminder_{slot}_text.txt";
+        var room = load_file(rpath);
+        var text = load_file(tpath);
+        if room != "" {
+            // Store as synthetic pending message so main loop picks it up
+            var pc = load_file("/app/data/pending_count.txt");
+            if pc == "" { pc = "0"; }
+            var proom = $"/app/data/pending_{pc}_room.txt";
+            store_file(proom, room);
+            var psender = $"/app/data/pending_{pc}_sender.txt";
+            store_file(psender, "reminder");
+            var pmsg = $"/app/data/pending_{pc}_msg.txt";
+            var msg = $"[System-Erinnerung] {text}";
+            store_file(pmsg, msg);
+            increment_pending();
+        }
+        // Clear reminder
+        var fp2 = $"/app/data/reminder_{slot}_due.txt";
+        store_file(fp2, "");
+        var rp2 = $"/app/data/reminder_{slot}_room.txt";
+        store_file(rp2, "");
+        var tp2 = $"/app/data/reminder_{slot}_text.txt";
+        store_file(tp2, "");
+        return;
+    }
+    // Decrement by 1
+    var nv = "";
+    if val == "1" { nv = "0"; }
+    if val == "2" { nv = "1"; }
+    if val == "3" { nv = "2"; }
+    if val == "4" { nv = "3"; }
+    if val == "5" { nv = "4"; }
+    if val == "6" { nv = "5"; }
+    if val == "7" { nv = "6"; }
+    if val == "8" { nv = "7"; }
+    if val == "9" { nv = "8"; }
+    if val == "10" { nv = "9"; }
+    if val == "15" { nv = "14"; }
+    if val == "20" { nv = "19"; }
+    if val == "30" { nv = "29"; }
+    if val == "40" { nv = "39"; }
+    if val == "60" { nv = "59"; }
+    if val == "90" { nv = "89"; }
+    if val == "120" { nv = "119"; }
+    if nv == "" { nv = "0"; }
+    var fp3 = $"/app/data/reminder_{slot}_due.txt";
+    store_file(fp3, nv);
+}
+
+fn do_reminder_tick() {
+    reminder_tick("0");
+    reminder_tick("1");
+    reminder_tick("2");
+    reminder_tick("3");
+    reminder_tick("4");
+}
+
 // ===== Main =====
 
 fn main() {
-    log_info("=== Varg Matrix Agent v11 Multi-Soul starting ===");
-    log_info("Features: Multi-Soul, Knowledge-Graph Tool Discovery, Self-Extending, Sandbox, STT, Permanent Memory");
+    log_info("=== Varg Matrix Agent v12 Alltags-Assistent starting ===");
+    log_info("Features: Multi-Soul, KG-Tools, Web Search, URL Fetch, Image Analysis, Reminders, PDF, STT, Sandbox");
 
     var homeserver = env("MATRIX_HOMESERVER");
     if homeserver == "" { homeserver = "http://conduit:6167"; }
@@ -2369,6 +2607,9 @@ fn main() {
             if cycle_str == "8" { store_file("/app/data/sync_cycle.txt", "9"); }
             if cycle_str == "9" { store_file("/app/data/sync_cycle.txt", "10"); }
         }
+
+        // Check reminders
+        do_reminder_tick();
 
         cfg.homeserver = $"{cfg.homeserver}";
     }
