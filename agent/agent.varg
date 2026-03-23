@@ -157,7 +157,10 @@ fn store_embedding(string room_id, string sender, string message) {
 // Plus system sections (toolformat, kontext, faehigkeiten) shared across all souls
 fn soul_add_entry(string soul_name, string section, string content) {
     var gh = graph_open("souls");
-    var props = {"soul": soul_name, "section": section, "content": content};
+    var sn = $"{soul_name}";
+    var sec = $"{section}";
+    var con = $"{content}";
+    var props = {"soul": sn, "section": sec, "content": con};
     graph_add_node(gh, "SoulEntry", props);
 }
 
@@ -212,7 +215,9 @@ fn soul_create(string name) {
     var marker = $"/app/data/soul_{name}_exists.txt";
     store_file(marker, "true");
     // Add display_name entry (default = name)
-    soul_add_entry(name, "display_name", name);
+    var nc1 = $"{name}";
+    var nc2 = $"{name}";
+    soul_add_entry(nc1, "display_name", nc2);
     log_info($"Soul created: {name}");
 }
 
@@ -330,89 +335,75 @@ fn load_soul_context(string room_id) {
 
 fn kg_seed_tool(string name, string desc, string args) {
     var gh = graph_open("kg_tools");
-    var props = {"name": name, "description": desc, "arguments": args};
+    var n1 = $"{name}";
+    var d1 = $"{desc}";
+    var a1 = $"{args}";
+    var n2 = $"{name}";
+    var d2 = $"{desc}";
+    var a2 = $"{args}";
+    var props = {"name": n1, "description": d1, "arguments": a1};
     graph_add_node(gh, "Tool", props);
     var vh = vector_store_open("kg_tools");
     var search_text = $"{name} - {desc} Argumente: {args}";
     var emb = embed(search_text);
     var doc_id = $"tool_{name}";
-    var meta = {"name": name, "description": desc, "arguments": args};
+    var meta = {"name": n2, "description": d2, "arguments": a2};
     vector_store_upsert(vh, doc_id, emb, meta);
 }
 
 fn kg_seed_knowledge(string title, string content, string category) {
     var gh = graph_open("kg_self");
-    var props = {"title": title, "content": content, "category": category};
+    var t1 = $"{title}";
+    var c1 = $"{content}";
+    var cat1 = $"{category}";
+    var t2 = $"{title}";
+    var c2 = $"{content}";
+    var cat2 = $"{category}";
+    var props = {"title": t1, "content": c1, "category": cat1};
     graph_add_node(gh, "Knowledge", props);
     var vh = vector_store_open("kg_self");
     var search_text = $"{title}: {content}";
     var emb = embed(search_text);
     var doc_id = $"varg_{title}";
-    var meta = {"title": title, "content": content, "category": category};
+    var meta = {"title": t2, "content": c2, "category": cat2};
     vector_store_upsert(vh, doc_id, emb, meta);
 }
 
 fn kg_register_custom_tool(string name, string desc, string code) {
     var gh = graph_open("kg_tools");
-    var props = {"name": name, "description": desc, "arguments": "via CLI/env", "custom": "true"};
+    var n1 = $"{name}";
+    var d1 = $"{desc}";
+    var n2 = $"{name}";
+    var d2 = $"{desc}";
+    var n3 = $"{name}";
+    var c1 = $"{code}";
+    var n4 = $"{name}";
+    var c2 = $"{code}";
+    var props = {"name": n1, "description": d1, "arguments": "via CLI/env", "custom": "true"};
     graph_add_node(gh, "Tool", props);
     var vh = vector_store_open("kg_tools");
     var search_text = $"{name} - {desc}";
     var emb = embed(search_text);
     var doc_id = $"tool_{name}";
-    var meta = {"name": name, "description": desc, "arguments": "custom", "custom": "true"};
+    var meta = {"name": n2, "description": d2, "arguments": "custom", "custom": "true"};
     vector_store_upsert(vh, doc_id, emb, meta);
     // Store source code in varg knowledge
     var gh2 = graph_open("kg_self");
-    var code_props = {"title": name, "content": code, "category": "custom_tool_source"};
+    var code_props = {"title": n3, "content": c1, "category": "custom_tool_source"};
     graph_add_node(gh2, "ToolSource", code_props);
     var vh2 = vector_store_open("kg_self");
     var code_search = $"Varg Tool {name}: {desc}";
     var code_emb = embed(code_search);
     var code_doc = $"toolsrc_{name}";
-    var code_meta = {"title": name, "content": code, "category": "custom_tool_source"};
+    var code_meta = {"title": n4, "content": c2, "category": "custom_tool_source"};
     vector_store_upsert(vh2, code_doc, code_emb, code_meta);
 }
 
+// Tool edges disabled - graph_add_edge requires int IDs, graph_query returns string IDs
+// Tool discovery works via vector search, edges are nice-to-have for future traversal
 fn kg_add_tool_edge(string from_tool, string relation, string to_tool) {
-    var gh = graph_open("kg_tools");
-    var from_nodes = graph_query(gh, "Tool");
-    var to_nodes = graph_query(gh, "Tool");
-    var from_id = "";
-    var to_id = "";
-    // Find node IDs by matching name (unrolled for up to 15 tools)
-    var fc = from_nodes.len();
-    if fc > 0 { var n = from_nodes[0]["name"]; if n == from_tool { from_id = from_nodes[0]["_id"]; } }
-    if fc > 1 { var n = from_nodes[1]["name"]; if n == from_tool { from_id = from_nodes[1]["_id"]; } }
-    if fc > 2 { var n = from_nodes[2]["name"]; if n == from_tool { from_id = from_nodes[2]["_id"]; } }
-    if fc > 3 { var n = from_nodes[3]["name"]; if n == from_tool { from_id = from_nodes[3]["_id"]; } }
-    if fc > 4 { var n = from_nodes[4]["name"]; if n == from_tool { from_id = from_nodes[4]["_id"]; } }
-    if fc > 5 { var n = from_nodes[5]["name"]; if n == from_tool { from_id = from_nodes[5]["_id"]; } }
-    if fc > 6 { var n = from_nodes[6]["name"]; if n == from_tool { from_id = from_nodes[6]["_id"]; } }
-    if fc > 7 { var n = from_nodes[7]["name"]; if n == from_tool { from_id = from_nodes[7]["_id"]; } }
-    if fc > 8 { var n = from_nodes[8]["name"]; if n == from_tool { from_id = from_nodes[8]["_id"]; } }
-    if fc > 9 { var n = from_nodes[9]["name"]; if n == from_tool { from_id = from_nodes[9]["_id"]; } }
-    if fc > 10 { var n = from_nodes[10]["name"]; if n == from_tool { from_id = from_nodes[10]["_id"]; } }
-    if fc > 11 { var n = from_nodes[11]["name"]; if n == from_tool { from_id = from_nodes[11]["_id"]; } }
-    var tc = to_nodes.len();
-    if tc > 0 { var n = to_nodes[0]["name"]; if n == to_tool { to_id = to_nodes[0]["_id"]; } }
-    if tc > 1 { var n = to_nodes[1]["name"]; if n == to_tool { to_id = to_nodes[1]["_id"]; } }
-    if tc > 2 { var n = to_nodes[2]["name"]; if n == to_tool { to_id = to_nodes[2]["_id"]; } }
-    if tc > 3 { var n = to_nodes[3]["name"]; if n == to_tool { to_id = to_nodes[3]["_id"]; } }
-    if tc > 4 { var n = to_nodes[4]["name"]; if n == to_tool { to_id = to_nodes[4]["_id"]; } }
-    if tc > 5 { var n = to_nodes[5]["name"]; if n == to_tool { to_id = to_nodes[5]["_id"]; } }
-    if tc > 6 { var n = to_nodes[6]["name"]; if n == to_tool { to_id = to_nodes[6]["_id"]; } }
-    if tc > 7 { var n = to_nodes[7]["name"]; if n == to_tool { to_id = to_nodes[7]["_id"]; } }
-    if tc > 8 { var n = to_nodes[8]["name"]; if n == to_tool { to_id = to_nodes[8]["_id"]; } }
-    if tc > 9 { var n = to_nodes[9]["name"]; if n == to_tool { to_id = to_nodes[9]["_id"]; } }
-    if tc > 10 { var n = to_nodes[10]["name"]; if n == to_tool { to_id = to_nodes[10]["_id"]; } }
-    if tc > 11 { var n = to_nodes[11]["name"]; if n == to_tool { to_id = to_nodes[11]["_id"]; } }
-    if from_id != "" {
-        if to_id != "" {
-            var meta = {"type": relation};
-            graph_add_edge(gh, from_id, relation, to_id, meta);
-        }
-    }
+    // Placeholder - will be enabled when Varg supports string-to-int parsing
+    log_info($"Edge: {from_tool} -{relation}-> {to_tool} (skipped - id type mismatch)");
 }
 
 fn seed_all_knowledge() {
@@ -494,6 +485,27 @@ fn do_login_http(Config cfg) -> string {
     var p2 = jpair(Q, "type", "m.id.user");
     var p3 = jpair(Q, "user", uname);
     var p4 = jpair(Q, "password", pass);
+    var p5 = jpair(Q, "initial_device_display_name", "Rose v11");
+    var body = $"{L}{p1}, {id_key}: {L}{p2}, {p3}{R}, {p4}, {p5}{R}";
+    var headers = {"Content-Type": "application/json"};
+    var url = $"{hs}/_matrix/client/v3/login";
+    var resp = "";
+    unsafe {
+        resp = http_request(url, "POST", headers, body) or "";
+    }
+    return resp;
+}
+
+// String-only login (avoids consuming Config struct)
+fn do_login_str(string hs, string username, string password) -> string {
+    var Q = env("JSON_Q");
+    var L = "{";
+    var R = "}";
+    var p1 = jpair(Q, "type", "m.login.password");
+    var id_key = jq(Q, "identifier");
+    var p2 = jpair(Q, "type", "m.id.user");
+    var p3 = jpair(Q, "user", username);
+    var p4 = jpair(Q, "password", password);
     var p5 = jpair(Q, "initial_device_display_name", "Rose v11");
     var body = $"{L}{p1}, {id_key}: {L}{p2}, {p3}{R}, {p4}, {p5}{R}";
     var headers = {"Content-Type": "application/json"};
@@ -1462,7 +1474,9 @@ fn execute_tool(string room_id, string tool_json) {
         var tool_desc = json_get(parsed, "/arguments/description");
         if tool_desc == "" { tool_desc = $"Custom Varg tool: {tool_name}"; }
         var tool_path = $"/app/tools/{tool_name}.varg";
-        store_file(tool_path, tool_code);
+        var tc_copy = $"{tool_code}";
+        var tc_save = $"{tool_code}";
+        store_file(tool_path, tc_save);
         var compile_cmd = $"cd /app && vargc build tools/{tool_name}.varg 2>&1";
         var compile_result = "";
         unsafe {
@@ -1475,7 +1489,6 @@ fn execute_tool(string room_id, string tool_json) {
             // Register in knowledge graph for future discovery
             var tn_copy = $"{tool_name}";
             var td_copy = $"{tool_desc}";
-            var tc_copy = $"{tool_code}";
             kg_register_custom_tool(tn_copy, td_copy, tc_copy);
             result = $"Tool {tool_name} compiled and registered in knowledge graph. Run with run_varg_tool(name={tool_name})";
         }
@@ -1723,7 +1736,8 @@ fn handle_command(string msg, string provider, string model, string nl, string r
         if tc > 14 { var tn = all_tools[14]["name"]; var td = all_tools[14]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
         // Custom tools on disk
         var ls_custom = "";
-        unsafe { ls_custom = exec("ls -1 /app/tools/*.varg 2>/dev/null") or ""; }
+        var ls_cmd2 = "ls -1 /app/tools/ 2>/dev/null";
+        unsafe { ls_custom = exec(ls_cmd2) or ""; }
         if ls_custom != "" { tlist = $"{tlist}{nl}{nl}Selbstgebaute Tools auf Disk:{nl}{ls_custom}"; }
         return tlist;
     }
@@ -2144,7 +2158,10 @@ fn main() {
         // try login again
         if token == "" {
             log_info("Retrying login after registration...");
-            var retry_resp = do_login_http(cfg);
+            var retry_hs = $"{cfg.homeserver}";
+            var retry_user = $"{cfg.username}";
+            var retry_pass = $"{cfg.password}";
+            var retry_resp = do_login_str(retry_hs, retry_user, retry_pass);
             if retry_resp != "" {
                 var rw2 = json_parse(retry_resp)?;
                 var rb2 = json_get(rw2, "/body");
