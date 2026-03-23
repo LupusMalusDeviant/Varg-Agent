@@ -1,5 +1,5 @@
 # --- Build stage ---
-FROM rust:1.85-slim AS builder
+FROM rust:latest AS builder
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Cargo.toml ./
@@ -9,6 +9,6 @@ RUN cargo build --release
 # --- Runtime stage ---
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/varg-stt /usr/local/bin/varg-stt
+COPY --from=builder /app/target/release/varg-media /usr/local/bin/varg-media
 EXPOSE 5000
-CMD ["varg-stt"]
+CMD ["varg-media"]

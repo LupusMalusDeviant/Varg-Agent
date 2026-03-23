@@ -427,6 +427,7 @@ fn seed_all_knowledge() {
     kg_seed_tool("build_varg_tool", "Kompiliert Varg-Quellcode zu einem Tool-Binary und registriert es im Wissensgraphen", "name: Tool-Name, code: Varg-Quellcode, description: Beschreibung was das Tool tut");
     kg_seed_tool("run_varg_tool", "Fuehrt ein selbst kompiliertes Varg-Tool aus", "name: Tool-Name, args: Argumente");
     kg_seed_tool("list_tools", "Zeigt alle verfuegbaren benutzerdefinierten Varg-Tools", "keine");
+    kg_seed_tool("generate_pdf", "Generiert ein PDF-Dokument und sendet es im Chat. Perfekt fuer Berichte, Zusammenfassungen, Listen.", "title: Dokumenttitel, sections: Array von {heading, body} Abschnitten, filename?: Dateiname (Standard: document.pdf)");
 
     // ===== Tool Relationships (Graph Edges) =====
     kg_add_tool_edge("git_clone", "enables", "read_repo_file");
@@ -434,6 +435,8 @@ fn seed_all_knowledge() {
     kg_add_tool_edge("build_varg_tool", "creates_for", "run_varg_tool");
     kg_add_tool_edge("write_file", "related", "send_file");
     kg_add_tool_edge("read_file", "related", "write_file");
+    kg_add_tool_edge("generate_pdf", "related", "write_file");
+    kg_add_tool_edge("generate_pdf", "related", "send_file");
 
     // ===== Varg Language Knowledge =====
     kg_seed_knowledge("Grundsyntax", "fn fuer Funktionen, var fuer Variablen, struct fuer Datenstrukturen. Typen: string, int, float, bool, map. String-Interpolation: $\"{variable}\". if/while/return wie C. Kein for-loop.", "syntax");
@@ -656,6 +659,25 @@ fn send_file_to_room(string hs, string at, string room_id, string filename, stri
     var body = $"{L}{p1}, {p2}, {p3}, {info_key}: {L}{mime}{R}{R}";
     var ts = time_millis();
     var path = $"{hs}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/varg_file_{ts}?access_token={at}";
+    var headers = {"Content-Type": "application/json"};
+    unsafe {
+        http_request(path, "PUT", headers, body);
+    }
+}
+
+fn send_pdf_to_room(string hs, string at, string room_id, string filename, string mxc_uri) {
+    var Q = env("JSON_Q");
+    var L = "{";
+    var R = "}";
+    var p1 = jpair(Q, "msgtype", "m.file");
+    var p2 = jpair(Q, "body", filename);
+    var p3 = jpair(Q, "url", mxc_uri);
+    var info_key = jq(Q, "info");
+    var mime = jpair(Q, "mimetype", "application/pdf");
+    var size_key = jq(Q, "size");
+    var body = $"{L}{p1}, {p2}, {p3}, {info_key}: {L}{mime}{R}{R}";
+    var ts = time_millis();
+    var path = $"{hs}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/varg_pdf_{ts}?access_token={at}";
     var headers = {"Content-Type": "application/json"};
     unsafe {
         http_request(path, "PUT", headers, body);
@@ -1513,6 +1535,73 @@ fn execute_tool(string room_id, string tool_json) {
         }
         if ls_result == "" { ls_result = "No custom tools yet"; }
         result = $"Custom Varg tools: {ls_result}";
+    }
+    if name == "generate_pdf" {
+        var pdf_title = json_get(parsed, "/arguments/title");
+        if pdf_title == "" { pdf_title = "Dokument"; }
+        var pdf_fname = json_get(parsed, "/arguments/filename");
+        if pdf_fname == "" { pdf_fname = "document.pdf"; }
+        var pdf_fname_c = $"{pdf_fname}";
+        var pdf_fname_c2 = $"{pdf_fname}";
+        // Build sections JSON from arguments
+        var sections_raw = json_get(parsed, "/arguments/sections");
+        var at = load_file("/app/data/matrix_at.txt");
+        var Q = env("JSON_Q");
+        var L = "{";
+        var R = "}";
+        var p1 = jpair(Q, "title", pdf_title);
+        var p2 = jpair(Q, "filename", pdf_fname);
+        var p3 = jpair(Q, "access_token", at);
+        // sections is already a JSON array string from the LLM
+        var skey = jq(Q, "sections");
+        var pdf_body = "";
+        if sections_raw != "" {
+            pdf_body = $"{L}{p1}, {p3}, {skey}: {sections_raw}{R}";
+        }
+        if sections_raw == "" {
+            // Fallback: single section from body text
+            var body_text = json_get(parsed, "/arguments/body");
+            if body_text == "" { body_text = "Kein Inhalt angegeben."; }
+            var sec_heading = jpair(Q, "heading", "");
+            var sec_body = jpair(Q, "body", body_text);
+            pdf_body = $"{L}{p1}, {p3}, {skey}: [{L}{sec_heading}, {sec_body}{R}]{R}";
+        }
+        var media_url = "http://stt:5000/generate-pdf";
+        var pdf_headers = {"Content-Type": "application/json"};
+        var pdf_resp = "";
+        unsafe {
+            pdf_resp = http_request(media_url, "POST", pdf_headers, pdf_body) or "";
+        }
+        if pdf_resp == "" {
+            result = "Media sidecar not reachable";
+        }
+        if pdf_resp != "" {
+            var pdf_wrap = json_parse(pdf_resp)?;
+            var pdf_body_str = json_get(pdf_wrap, "/body");
+            if pdf_body_str != "" {
+                var pdf_parsed = json_parse(pdf_body_str)?;
+                var mxc_uri = json_get(pdf_parsed, "/mxc_uri");
+                var pdf_err = json_get(pdf_parsed, "/error");
+                if pdf_err != "" {
+                    result = $"PDF generation failed: {pdf_err}";
+                }
+                if mxc_uri != "" {
+                    // Send PDF to room
+                    var hs2 = load_file("/app/data/matrix_hs.txt");
+                    var at2 = load_file("/app/data/matrix_at.txt");
+                    var rid = $"{room_id}";
+                    var mxc_copy = $"{mxc_uri}";
+                    send_pdf_to_room(hs2, at2, rid, pdf_fname_c, mxc_copy);
+                    result = $"PDF '{pdf_fname_c2}' generated and sent to chat";
+                }
+                if mxc_uri == "" {
+                    if pdf_err == "" { result = "PDF upload returned no URI"; }
+                }
+            }
+            if pdf_body_str == "" {
+                result = "PDF response parse error";
+            }
+        }
     }
     if result == "" {
         result = $"Unknown tool: {name}";
