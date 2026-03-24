@@ -1,6 +1,6 @@
 # Varg Agent - Multi-Soul Matrix AI Agent
 
-A self-contained, self-extending AI chat agent written in [Varg](https://github.com/LupusMalusDeviant/VARG), communicating over the Matrix protocol. Features a **Multi-Soul personality system**, knowledge-graph-driven tool discovery, permanent memory, 37 built-in tools, and the ability to build its own tools at runtime.
+A self-contained, self-extending AI chat agent written in [Varg](https://github.com/LupusMalusDeviant/VARG) (v0.9.0), communicating over the Matrix protocol. Features a **Multi-Soul personality system**, SQLite-persistent knowledge graphs, 37 built-in tools, permanent memory, and the ability to build its own tools at runtime.
 
 ## Architecture
 
@@ -25,21 +25,22 @@ A self-contained, self-extending AI chat agent written in [Varg](https://github.
 
 | Service | Description |
 |---------|-------------|
-| **agent** | The Varg agent binary. Multi-soul personality, LLM integration, 37 tools, Graph-RAG |
+| **agent** | The Varg agent binary. Multi-soul personality, LLM integration, 37 tools, Graph-RAG, SQLite-persistent knowledge |
 | **conduit** | Matrix homeserver (Conduit) - lightweight, single-binary Rust server |
 | **element** | Element Web - Matrix chat UI |
 | **caddy** | Reverse proxy routing Matrix API + Element Web |
-| **stt** | Rust media sidecar (varg-media) - STT, TTS, PDF, web search, email, calendar, image gen, and more |
+| **stt** | Rust media sidecar (varg-media) - STT, TTS, web search, email, calendar, image gen, binary uploads |
 | **sandbox** | Code execution sidecar with Docker-in-Docker for running arbitrary code |
 
 ## Features
 
 ### Multi-Soul System
-- Swappable AI personalities stored entirely in the knowledge graph
+- Swappable AI personalities stored entirely in the knowledge graph (SQLite-persistent)
 - Each soul has sections: **identity**, **tone**, **traits**, **empathy**, **user_model**
 - Souls bound per Matrix room - different rooms can have different personalities
 - Default soul: **Rose** - warm, direct, curious
 - Create/modify souls via chat commands or the `update_soul` tool (Rose can modify her own personality)
+- Soul modifications persist across container restarts
 - `!soul create`, `!soul set`, `!soul bind`
 
 ### 37 Built-in Tools
@@ -87,11 +88,16 @@ A self-contained, self-extending AI chat agent written in [Varg](https://github.
 - `set_config` / `list_config` - Configure API keys and credentials via Matrix chat
 - `update_soul` - Modify soul personality sections at runtime
 
-### Knowledge Graph (4 Domains)
+### Knowledge Graph (4 Domains, SQLite-Persistent)
+
+All knowledge graphs are automatically persisted to SQLite via Varg v0.9.0. Data survives container restarts.
+
 1. **souls** - Personality system (always fully loaded, highest priority)
 2. **kg_tools** - Tool registry with vector search (discovers relevant tools per message)
 3. **kg_own** - Varg language knowledge, architecture, agent source code
 4. **per-room memory** - Episodic memory + vector embeddings + graph DB
+
+Version-gated seeding: the graph is only seeded on first run or after a version bump (`!reseed` to force).
 
 ### Self-Extending Tools
 The agent can write, compile, and register new tools in Varg at runtime:
@@ -103,6 +109,7 @@ Rose: "Done! Tool 'celsius_to_f' is ready. Try it!"
 
 ### Permanent Memory
 - Every message (user + agent) stored in memory, graph, and vector store
+- All stored in SQLite - survives restarts, never lost
 - Context-based retrieval via Graph-RAG on every message
 - `!clear` only resets prompt history - the agent **never forgets**
 
@@ -111,11 +118,11 @@ Rose: "Done! Tool 'celsius_to_f' is ready. Try it!"
 - Configurable via environment variables
 
 ### Media Sidecar (Rust)
-A single Rust binary handling all binary/media operations that Varg can't do natively:
+A single Rust binary handling binary/media operations that require non-UTF-8 data:
 - Speech-to-text (Gemini transcription)
 - Text-to-speech (Gemini TTS)
 - Image generation (Gemini Imagen)
-- PDF generation (printpdf)
+- Binary file uploads to Matrix (PDF, images, audio)
 - Web search (DuckDuckGo HTML scraping)
 - URL text extraction (scraper)
 - Email send/list/read (lettre + IMAP)
@@ -251,7 +258,7 @@ And `deploy/element/config.json`:
 | Command | Description |
 |---------|-------------|
 | `!help` | Show all commands |
-| `!status` | Agent status, active soul, LLM info |
+| `!status` | Agent status, active soul, LLM info, KG version |
 | `!soul` | Show active soul for this room |
 | `!soul list` | List all available souls |
 | `!soul create <name>` | Create a new empty soul |
@@ -262,6 +269,7 @@ And `deploy/element/config.json`:
 | `!remember <text>` | Store a note in room context |
 | `!recall` | Retrieve stored notes |
 | `!clear` | Clear prompt history (memory stays permanent) |
+| `!reseed` | Reset knowledge graph version (reseed on next restart) |
 | `!time` | Current timestamp |
 
 ## Project Structure
@@ -269,7 +277,7 @@ And `deploy/element/config.json`:
 ```
 Varg-Agent/
   agent/
-    agent.varg          # Main agent source (~3700 lines of Varg)
+    agent.varg          # Main agent source (~3800 lines of Varg)
     Dockerfile          # Multi-stage: compile Varg -> Rust -> binary
   stt/
     src/main.rs         # Rust media sidecar (15 endpoints)
@@ -287,15 +295,18 @@ Varg-Agent/
 
 ## The Varg Language
 
-[Varg](https://github.com/LupusMalusDeviant/VARG) is a compiled AI agent language that transpiles to Rust. It provides built-in primitives for:
+[Varg](https://github.com/LupusMalusDeviant/VARG) (v0.9.0) is a compiled AI agent language that transpiles to Rust. It provides built-in primitives for:
 
 - HTTP requests, JSON parsing
-- Graph databases, vector stores, embeddings
-- Episodic memory with semantic search
+- Graph databases with SQLite persistence
+- Vector stores with SQLite persistence
+- Episodic memory with semantic search (persistent)
+- Base64 encoding/decoding (native)
+- PDF generation (native, via printpdf)
 - File I/O, process execution
 - Ownership/borrowing (Rust-like)
 
-The agent is 100% written in Varg - no Python, no JavaScript, no glue code for the core agent logic. Binary operations (audio, images, PDFs, email) are handled by a Rust media sidecar since Varg doesn't support binary data types.
+The agent is 100% written in Varg - no Python, no JavaScript, no glue code for the core agent logic. Binary operations (audio, images, Matrix media uploads) are handled by a Rust media sidecar since Varg's HTTP layer is string-only.
 
 ## License
 

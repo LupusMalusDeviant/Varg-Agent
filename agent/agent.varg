@@ -1,5 +1,5 @@
 // =============================================================================
-// Varg Matrix Chat Agent - v14 "Full Assistant"
+// Varg Matrix Chat Agent - v14 "Full Assistant" (Varg v0.9.0 — SQLite-persistent graphs)
 // Features: Multi-Soul System, Knowledge-Graph Tools, Self-Extending, Multi-Room,
 //           Graph-RAG, STT, Sandbox, Git Clone, Permanent Memory,
 //           Web Search, URL Fetch, Image Analysis (Gemini Vision), Reminders, PDF Gen,
@@ -325,6 +325,11 @@ fn load_soul_context_for(string soul_name) {
     if count > 7 { var s = nodes[7]["soul"]; if s == soul_name { var sec = nodes[7]["section"]; var c = nodes[7]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
     if count > 8 { var s = nodes[8]["soul"]; if s == soul_name { var sec = nodes[8]["section"]; var c = nodes[8]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
     if count > 9 { var s = nodes[9]["soul"]; if s == soul_name { var sec = nodes[9]["section"]; var c = nodes[9]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 10 { var s = nodes[10]["soul"]; if s == soul_name { var sec = nodes[10]["section"]; var c = nodes[10]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 11 { var s = nodes[11]["soul"]; if s == soul_name { var sec = nodes[11]["section"]; var c = nodes[11]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 12 { var s = nodes[12]["soul"]; if s == soul_name { var sec = nodes[12]["section"]; var c = nodes[12]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 13 { var s = nodes[13]["soul"]; if s == soul_name { var sec = nodes[13]["section"]; var c = nodes[13]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 14 { var s = nodes[14]["soul"]; if s == soul_name { var sec = nodes[14]["section"]; var c = nodes[14]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
     store_file("/app/data/kg_soul.txt", ctx);
 }
 
@@ -410,8 +415,20 @@ fn kg_add_tool_edge(string from_tool, string relation, string to_tool) {
 }
 
 fn seed_all_knowledge() {
-    // Always seed - graph is in-memory and lost on container restart
-    log_info("Seeding knowledge graph: Multi-Soul, Tools, Self-Knowledge...");
+    var current_version = "v15";
+    var stored_version = load_file("/app/data/kg_version.txt");
+    if stored_version == current_version {
+        log_info($"Knowledge graph already seeded ({current_version}), skipping");
+        return;
+    }
+    // Version mismatch or first run — clear old graph DBs to prevent duplicates
+    log_info($"Seeding knowledge graph ({current_version}): Multi-Soul, Tools, Self-Knowledge...");
+    // Clear old persistent DBs to prevent duplicates (overwrite with empty)
+    store_file("souls.graph.db", "");
+    store_file("kg_tools.graph.db", "");
+    store_file("kg_own.graph.db", "");
+    store_file("kg_tools.vector.db", "");
+    store_file("kg_own.vector.db", "");
 
     // ===== Soul (highest priority domain, multi-soul system) =====
     seed_soul_rose();
@@ -523,7 +540,7 @@ fn seed_all_knowledge() {
         vector_store_upsert(vh, "agent_source", code_emb, code_meta);
     }
 
-    store_file("/app/data/kg_version.txt", "v14");
+    store_file("/app/data/kg_version.txt", current_version);
     log_info("Knowledge graph seeded: Multi-Soul + Tools + Self-Knowledge (souls, kg_tools, kg_own, per-room)");
 }
 
@@ -1174,7 +1191,7 @@ fn search_graph_context(string room_id, string search_text) {
 fn discover_tools(string user_msg) {
     var vh = vector_store_open("kg_tools");
     var emb = embed(user_msg);
-    var results = vector_store_search(vh, emb, 5);
+    var results = vector_store_search(vh, emb, 8);
     var nl = env("JSON_NL");
     var ctx = "";
     var count = results.len();
@@ -1211,6 +1228,27 @@ fn discover_tools(string user_msg) {
         var a4 = results[4]["arguments"];
         var line4 = $"{n4}({a4}) - {d4}";
         ctx = $"{ctx}{nl}{line4}";
+    }
+    if count > 5 {
+        var n5 = results[5]["name"];
+        var d5 = results[5]["description"];
+        var a5 = results[5]["arguments"];
+        var line5 = $"{n5}({a5}) - {d5}";
+        ctx = $"{ctx}{nl}{line5}";
+    }
+    if count > 6 {
+        var n6 = results[6]["name"];
+        var d6 = results[6]["description"];
+        var a6 = results[6]["arguments"];
+        var line6 = $"{n6}({a6}) - {d6}";
+        ctx = $"{ctx}{nl}{line6}";
+    }
+    if count > 7 {
+        var n7 = results[7]["name"];
+        var d7 = results[7]["description"];
+        var a7 = results[7]["arguments"];
+        var line7 = $"{n7}({a7}) - {d7}";
+        ctx = $"{ctx}{nl}{line7}";
     }
     store_file("/app/data/kg_tools.txt", ctx);
 }
@@ -3007,7 +3045,7 @@ fn do_tool_followup(Config cfg, Session sess, string room_id, string reply, stri
 
 fn handle_command(string msg, string provider, string model, string nl, string room_id) -> string {
     if msg == "!help" {
-        return $"Multi-Soul Agent v11{nl}Commands:{nl}  !help - Hilfe{nl}  !time - Zeitstempel{nl}  !status - Agent-Status{nl}  !tools - Zeigt Tools{nl}  !clear - History loeschen (Gedaechtnis bleibt!){nl}  !remember <text> - Wissen speichern{nl}  !recall - Wissen abrufen{nl}  !soul - Aktive Seele anzeigen{nl}  !soul list - Alle Seelen{nl}  !soul create <name> - Neue Seele{nl}  !soul bind <name> - Seele an diesen Raum binden{nl}  !soul info <name> - Seelen-Details{nl}  !soul set <name> <section> <text> - Section setzen";
+        return $"Varg Agent v15 (Varg v0.9.0){nl}Commands:{nl}  !help - Hilfe{nl}  !time - Zeitstempel{nl}  !status - Agent-Status{nl}  !tools - Zeigt alle 37+ Tools{nl}  !clear - History loeschen (Gedaechtnis bleibt!){nl}  !remember <text> - Wissen speichern{nl}  !recall - Wissen abrufen{nl}  !reseed - Wissensgraph neu aufbauen{nl}  !soul - Aktive Seele anzeigen{nl}  !soul list - Alle Seelen{nl}  !soul create <name> - Neue Seele{nl}  !soul bind <name> - Seele an diesen Raum binden{nl}  !soul info <name> - Seelen-Details{nl}  !soul set <name> <section> <text> - Section setzen";
     }
 
     // ===== Soul Commands =====
@@ -3110,7 +3148,12 @@ fn handle_command(string msg, string provider, string model, string nl, string r
     if msg == "!status" {
         var rid_s = $"{room_id}";
         var active_soul = get_room_soul(rid_s);
-        return $"Multi-Soul Agent v11{nl}Aktive Seele: {active_soul}{nl}LLM: {provider} / {model}{nl}Room: {room_id}{nl}Features: Multi-Soul, Wissensgraph, Self-Extending Tools, Graph-RAG, Sandbox, STT, Permanentes Gedaechtnis";
+        var kg_ver = load_file("/app/data/kg_version.txt");
+        return $"Varg Agent v15 (Varg v0.9.0){nl}Aktive Seele: {active_soul}{nl}LLM: {provider} / {model}{nl}KG Version: {kg_ver} (SQLite-persistent){nl}Room: {room_id}{nl}Features: Multi-Soul, Wissensgraph (persistent), Self-Extending Tools, Graph-RAG, STT, TTS, Image Gen, Web Search, PDF, Weather, Email, Calendar, Smart Home, Location, Translation, Todo, File Conversion, Config via Chat";
+    }
+    if msg == "!reseed" {
+        store_file("/app/data/kg_version.txt", "");
+        return "Knowledge graph version reset. Restart container to reseed.";
     }
     if msg == "!clear" {
         save_room_history(room_id, "");
@@ -3154,6 +3197,31 @@ fn handle_command(string msg, string provider, string model, string nl, string r
         if tc > 12 { var tn = all_tools[12]["name"]; var td = all_tools[12]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
         if tc > 13 { var tn = all_tools[13]["name"]; var td = all_tools[13]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
         if tc > 14 { var tn = all_tools[14]["name"]; var td = all_tools[14]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 15 { var tn = all_tools[15]["name"]; var td = all_tools[15]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 16 { var tn = all_tools[16]["name"]; var td = all_tools[16]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 17 { var tn = all_tools[17]["name"]; var td = all_tools[17]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 18 { var tn = all_tools[18]["name"]; var td = all_tools[18]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 19 { var tn = all_tools[19]["name"]; var td = all_tools[19]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 20 { var tn = all_tools[20]["name"]; var td = all_tools[20]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 21 { var tn = all_tools[21]["name"]; var td = all_tools[21]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 22 { var tn = all_tools[22]["name"]; var td = all_tools[22]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 23 { var tn = all_tools[23]["name"]; var td = all_tools[23]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 24 { var tn = all_tools[24]["name"]; var td = all_tools[24]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 25 { var tn = all_tools[25]["name"]; var td = all_tools[25]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 26 { var tn = all_tools[26]["name"]; var td = all_tools[26]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 27 { var tn = all_tools[27]["name"]; var td = all_tools[27]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 28 { var tn = all_tools[28]["name"]; var td = all_tools[28]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 29 { var tn = all_tools[29]["name"]; var td = all_tools[29]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 30 { var tn = all_tools[30]["name"]; var td = all_tools[30]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 31 { var tn = all_tools[31]["name"]; var td = all_tools[31]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 32 { var tn = all_tools[32]["name"]; var td = all_tools[32]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 33 { var tn = all_tools[33]["name"]; var td = all_tools[33]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 34 { var tn = all_tools[34]["name"]; var td = all_tools[34]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 35 { var tn = all_tools[35]["name"]; var td = all_tools[35]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 36 { var tn = all_tools[36]["name"]; var td = all_tools[36]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 37 { var tn = all_tools[37]["name"]; var td = all_tools[37]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 38 { var tn = all_tools[38]["name"]; var td = all_tools[38]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
+        if tc > 39 { var tn = all_tools[39]["name"]; var td = all_tools[39]["description"]; tlist = $"{tlist}{nl}  {tn} - {td}"; }
         // Custom tools on disk
         var ls_custom = "";
         var ls_cmd2 = "ls -1 /app/tools/ 2>/dev/null";

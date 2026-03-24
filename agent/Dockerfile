@@ -4,7 +4,7 @@
 # =============================================================================
 
 # --- Stage 1: Build the Varg compiler from source ---
-FROM rust:1.85-bookworm AS vargc-builder
+FROM rust:latest AS vargc-builder
 
 WORKDIR /build
 
@@ -16,7 +16,7 @@ RUN cargo build --release -p vargc && \
     cp target/release/vargc /usr/local/bin/vargc
 
 # --- Stage 2: Compile the Varg agent ---
-FROM rust:1.85-bookworm AS agent-builder
+FROM rust:latest AS agent-builder
 
 RUN rustup component add rustfmt
 
@@ -31,7 +31,7 @@ COPY agent.varg .
 RUN vargc build agent.varg
 
 # --- Stage 3: Runtime with vargc for self-extending tools ---
-FROM rust:1.85-bookworm AS runtime
+FROM rust:latest AS runtime
 
 RUN apt-get update && apt-get install -y \
     ca-certificates libssl3 \
@@ -50,4 +50,5 @@ COPY --from=vargc-builder /build/VARG/varg-compiler/crates /app/crates
 
 RUN mkdir -p /app/data /app/tools
 
-CMD ["/app/agent"]
+# Run from /app/data so graph_open() creates .graph.db files in the persistent volume
+CMD ["sh", "-c", "cd /app/data && /app/agent"]
