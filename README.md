@@ -1,6 +1,6 @@
 # Varg Agent - Multi-Soul Matrix AI Agent
 
-A self-contained, self-extending AI chat agent written in [Varg](https://github.com/LupusMalusDeviant/VARG), communicating over the Matrix protocol. Features a **Multi-Soul personality system**, knowledge-graph-driven tool discovery, permanent memory, speech-to-text, sandboxed code execution, and the ability to build its own tools at runtime.
+A self-contained, self-extending AI chat agent written in [Varg](https://github.com/LupusMalusDeviant/VARG), communicating over the Matrix protocol. Features a **Multi-Soul personality system**, knowledge-graph-driven tool discovery, permanent memory, 37 built-in tools, and the ability to build its own tools at runtime.
 
 ## Architecture
 
@@ -15,9 +15,9 @@ A self-contained, self-extending AI chat agent written in [Varg](https://github.
                               +-------------------+-------------------+
                               |                   |                   |
                         +-----------+      +-----------+      +-----------+
-                        |   Agent   |      |    STT    |      |  Sandbox  |
-                        | (Varg/    |      | (Speech   |      | (Code     |
-                        |  Rose)    |      |  to Text) |      |  Exec)    |
+                        |   Agent   |      |   Media   |      |  Sandbox  |
+                        | (Varg/    |      | (Rust     |      | (Code     |
+                        |  Rose)    |      |  Sidecar) |      |  Exec)    |
                         +-----------+      +-----------+      +-----------+
 ```
 
@@ -25,26 +25,72 @@ A self-contained, self-extending AI chat agent written in [Varg](https://github.
 
 | Service | Description |
 |---------|-------------|
-| **agent** | The Varg agent binary. Multi-soul personality, LLM integration, tool system, Graph-RAG |
+| **agent** | The Varg agent binary. Multi-soul personality, LLM integration, 37 tools, Graph-RAG |
 | **conduit** | Matrix homeserver (Conduit) - lightweight, single-binary Rust server |
 | **element** | Element Web - Matrix chat UI |
 | **caddy** | Reverse proxy routing Matrix API + Element Web |
-| **stt** | Speech-to-text sidecar (Flask + Gemini) for voice message transcription |
+| **stt** | Rust media sidecar (varg-media) - STT, TTS, PDF, web search, email, calendar, image gen, and more |
 | **sandbox** | Code execution sidecar with Docker-in-Docker for running arbitrary code |
 
 ## Features
 
 ### Multi-Soul System
-- Swappable AI personalities stored in the knowledge graph
-- Each soul has 5 sections: **identity**, **tone**, **traits**, **empathy**, **user_model**
+- Swappable AI personalities stored entirely in the knowledge graph
+- Each soul has sections: **identity**, **tone**, **traits**, **empathy**, **user_model**
 - Souls bound per Matrix room - different rooms can have different personalities
-- Default soul: **Rose** (inspired by Rose Tyler + Alan Turing)
-- Create new souls via chat commands: `!soul create`, `!soul set`, `!soul bind`
+- Default soul: **Rose** - warm, direct, curious
+- Create/modify souls via chat commands or the `update_soul` tool (Rose can modify her own personality)
+- `!soul create`, `!soul set`, `!soul bind`
+
+### 37 Built-in Tools
+
+**Files & Memory**
+- `read_file` / `write_file` / `send_file` - File system access + Matrix file sharing
+- `remember` / `recall` - Room-scoped persistent notes
+
+**Code & Development**
+- `run_code` - Execute code in Docker sandboxes (Python, Node, Rust, etc.)
+- `git_clone` / `read_repo_file` - Clone and explore Git repositories
+- `build_varg_tool` / `run_varg_tool` / `list_tools` - Self-extending tool system
+
+**Web & Search**
+- `web_search` - DuckDuckGo web search
+- `fetch_url` - Extract text content from URLs
+
+**Media & Documents**
+- `generate_pdf` - Create PDF documents with sections and headings
+- `analyze_image` - Image analysis via Gemini Vision
+- `tts_respond` - Text-to-speech via Gemini TTS
+- `generate_image` - Image generation via Gemini Imagen
+- `convert_image` - Image format/size conversion
+- `convert_to_pdf` - Convert images to PDF
+
+**Communication**
+- `send_email` / `list_emails` / `read_email` - IMAP/SMTP email integration
+- `set_reminder` - Timed reminders (cycle-based countdown)
+
+**Smart Home**
+- `smarthome_list` / `smarthome_status` / `smarthome_control` - Home Assistant integration
+
+**Location & Navigation**
+- `search_location` - Geocoding via Nominatim
+- `get_route` - Routing via OSRM
+
+**Productivity**
+- `add_todo` / `list_todos` / `done_todo` - Per-room todo lists
+- `get_time` - Current timestamp
+- `get_weather` - Weather via OpenWeatherMap
+- `translate` - Translation via Gemini
+- `calendar_list` / `calendar_create` - CalDAV calendar integration
+
+**System**
+- `set_config` / `list_config` - Configure API keys and credentials via Matrix chat
+- `update_soul` - Modify soul personality sections at runtime
 
 ### Knowledge Graph (4 Domains)
 1. **souls** - Personality system (always fully loaded, highest priority)
 2. **kg_tools** - Tool registry with vector search (discovers relevant tools per message)
-3. **kg_self** - Varg language knowledge, architecture, agent source code
+3. **kg_own** - Varg language knowledge, architecture, agent source code
 4. **per-room memory** - Episodic memory + vector embeddings + graph DB
 
 ### Self-Extending Tools
@@ -64,9 +110,17 @@ Rose: "Done! Tool 'celsius_to_f' is ready. Try it!"
 - **Gemini** (default), **OpenAI**, **Anthropic Claude**, **Ollama** (local + cloud)
 - Configurable via environment variables
 
-### Speech-to-Text
-- Voice messages (m.audio) automatically transcribed via Gemini
-- Transcription injected as `[Sprachnachricht] <text>`
+### Media Sidecar (Rust)
+A single Rust binary handling all binary/media operations that Varg can't do natively:
+- Speech-to-text (Gemini transcription)
+- Text-to-speech (Gemini TTS)
+- Image generation (Gemini Imagen)
+- PDF generation (printpdf)
+- Web search (DuckDuckGo HTML scraping)
+- URL text extraction (scraper)
+- Email send/list/read (lettre + IMAP)
+- Calendar integration (CalDAV)
+- Image conversion (image crate)
 
 ### Sandboxed Code Execution
 - Run arbitrary code in Docker containers
@@ -120,14 +174,41 @@ VARG_LLM_MODEL=gemini-2.0-flash
 
 # API Keys (only the one for your chosen provider)
 GEMINI_API_KEY=your-gemini-key
-OPENAI_API_KEY=                    # For OpenAI or Ollama Cloud
+OPENAI_API_KEY=                    # For OpenAI
 ANTHROPIC_API_KEY=                 # For Claude
 
 # Ollama (local or cloud)
-VARG_LLM_URL=                     # e.g. http://host.docker.internal:11434 or https://api.ollama.com/v1/chat/completions
+VARG_LLM_URL=                     # e.g. http://host.docker.internal:11434
 
 # Ports
 HTTP_PORT=2077                     # Port for Caddy (Element Web + Matrix API)
+```
+
+Optional service credentials (can also be set via Matrix chat using `set_config`):
+
+```env
+# Weather
+OPENWEATHERMAP_API_KEY=            # For get_weather tool
+
+# Smart Home
+HASS_URL=                          # Home Assistant URL
+HASS_TOKEN=                        # Home Assistant long-lived access token
+
+# Email
+SMTP_HOST=                         # SMTP server
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=                         # Sender email address
+IMAP_HOST=                         # IMAP server
+IMAP_PORT=993
+IMAP_USER=
+IMAP_PASS=
+
+# Calendar (CalDAV)
+CALDAV_URL=                        # CalDAV server URL
+CALDAV_USER=
+CALDAV_PASS=
 ```
 
 ### Accessing the Chat
@@ -188,11 +269,12 @@ And `deploy/element/config.json`:
 ```
 Varg-Agent/
   agent/
-    agent.varg          # Main agent source (~2200 lines of Varg)
+    agent.varg          # Main agent source (~3700 lines of Varg)
     Dockerfile          # Multi-stage: compile Varg -> Rust -> binary
   stt/
-    app.py              # Flask STT sidecar (Gemini transcription)
-    Dockerfile
+    src/main.rs         # Rust media sidecar (15 endpoints)
+    Cargo.toml          # varg-media crate
+    Dockerfile          # Multi-stage Rust build
   sandbox/
     app.py              # Flask sandbox sidecar (Docker-in-Docker)
     Dockerfile
@@ -213,7 +295,7 @@ Varg-Agent/
 - File I/O, process execution
 - Ownership/borrowing (Rust-like)
 
-The agent is 100% written in Varg - no Python, no JavaScript, no glue code for the core agent logic.
+The agent is 100% written in Varg - no Python, no JavaScript, no glue code for the core agent logic. Binary operations (audio, images, PDFs, email) are handled by a Rust media sidecar since Varg doesn't support binary data types.
 
 ## License
 
