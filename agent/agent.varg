@@ -410,8 +410,7 @@ fn kg_add_tool_edge(string from_tool, string relation, string to_tool) {
 }
 
 fn seed_all_knowledge() {
-    var marker = load_file("/app/data/kg_version.txt");
-    if marker == "v14" { return; }
+    // Always seed - graph is in-memory and lost on container restart
     log_info("Seeding knowledge graph: Multi-Soul, Tools, Self-Knowledge...");
 
     // ===== Soul (highest priority domain, multi-soul system) =====
