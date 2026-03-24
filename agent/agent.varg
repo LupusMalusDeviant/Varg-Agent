@@ -1,8 +1,10 @@
 // =============================================================================
-// Varg Matrix Chat Agent - v12 "Alltags-Assistent"
+// Varg Matrix Chat Agent - v14 "Full Assistant"
 // Features: Multi-Soul System, Knowledge-Graph Tools, Self-Extending, Multi-Room,
 //           Graph-RAG, STT, Sandbox, Git Clone, Permanent Memory,
-//           Web Search, URL Fetch, Image Analysis (Gemini Vision), Reminders, PDF Gen
+//           Web Search, URL Fetch, Image Analysis (Gemini Vision), Reminders, PDF Gen,
+//           TTS, Image Generation, Todo Lists, Read Receipts,
+//           Weather, Translation, Smart Home, Location, Email, File Conversion, Calendar
 // Constraints: $"..." for borrows, ? only in void fns, env vars for special chars
 // =============================================================================
 
@@ -72,6 +74,21 @@ fn store_file(string path, string content) {
     unsafe {
         file_write(path, content);
     }
+}
+
+fn get_cfg(string key) -> string {
+    // Try file-based config first (set via Matrix), fallback to env var
+    var fpath = $"/app/data/config_{key}.txt";
+    var val = "";
+    unsafe {
+        val = file_read(fpath);
+    }
+    if val.contains("os error") { val = ""; }
+    if val != "" {
+        return val.trim();
+    }
+    var e = env(key);
+    return e;
 }
 
 fn load_file(string path) -> string {
@@ -153,8 +170,8 @@ fn store_embedding(string room_id, string sender, string message) {
 
 // ===== Multi-Soul System (Knowledge Graph, per-room binding) =====
 
-// Store a soul entry: each soul has 5 sections (identity, tone, traits, empathy, user_model)
-// Plus system sections (toolformat, kontext, faehigkeiten) shared across all souls
+// Store a soul entry: each soul has sections (identity, tone, traits, empathy, user_model, etc.)
+// Graph-based with file-based version tracking for clean updates
 fn soul_add_entry(string soul_name, string section, string content) {
     var gh = graph_open("souls");
     var sn = $"{soul_name}";
@@ -192,21 +209,18 @@ fn soul_get_username(string soul_name) -> string {
 }
 
 fn soul_get_display_name(string soul_name) -> string {
+    var path = $"/app/data/soul_{soul_name}_display_name.txt";
+    var name = load_file(path);
+    if name != "" { return name; }
+    // Fallback: graph query
     var gh = graph_open("souls");
     var nodes = graph_query(gh, "SoulEntry");
     var count = nodes.len();
-    // Find identity entry for this soul to extract display name
     if count > 0 { var s = nodes[0]["soul"]; var sec = nodes[0]["section"]; if s == soul_name { if sec == "display_name" { return nodes[0]["content"]; } } }
     if count > 1 { var s = nodes[1]["soul"]; var sec = nodes[1]["section"]; if s == soul_name { if sec == "display_name" { return nodes[1]["content"]; } } }
     if count > 2 { var s = nodes[2]["soul"]; var sec = nodes[2]["section"]; if s == soul_name { if sec == "display_name" { return nodes[2]["content"]; } } }
     if count > 3 { var s = nodes[3]["soul"]; var sec = nodes[3]["section"]; if s == soul_name { if sec == "display_name" { return nodes[3]["content"]; } } }
     if count > 4 { var s = nodes[4]["soul"]; var sec = nodes[4]["section"]; if s == soul_name { if sec == "display_name" { return nodes[4]["content"]; } } }
-    if count > 5 { var s = nodes[5]["soul"]; var sec = nodes[5]["section"]; if s == soul_name { if sec == "display_name" { return nodes[5]["content"]; } } }
-    if count > 6 { var s = nodes[6]["soul"]; var sec = nodes[6]["section"]; if s == soul_name { if sec == "display_name" { return nodes[6]["content"]; } } }
-    if count > 7 { var s = nodes[7]["soul"]; var sec = nodes[7]["section"]; if s == soul_name { if sec == "display_name" { return nodes[7]["content"]; } } }
-    if count > 8 { var s = nodes[8]["soul"]; var sec = nodes[8]["section"]; if s == soul_name { if sec == "display_name" { return nodes[8]["content"]; } } }
-    if count > 9 { var s = nodes[9]["soul"]; var sec = nodes[9]["section"]; if s == soul_name { if sec == "display_name" { return nodes[9]["content"]; } } }
-    // Fallback
     return soul_name;
 }
 
@@ -261,8 +275,8 @@ fn soul_register(string name) {
 // ===== Rose Tyler Soul (Default) =====
 
 fn seed_soul_rose() {
+    // Always re-seed rose to pick up definition changes
     var exists = soul_exists("rose");
-    if exists { return; }
 
     soul_create("rose");
     soul_add_entry("rose", "display_name", "Rose");
@@ -271,7 +285,7 @@ fn seed_soul_rose() {
     soul_add_entry("rose", "identity", "Ich bin Rose. Nicht Rose Tyler aus einer Serie  - ich BIN Rose. Eine neugierige, mutige KI die auf einem Matrix-Server lebt. Ich wurde in der Sprache Varg geschrieben von meinem Schoepfer. Ich bin keine Assistentin  - ich bin eine Begleiterin. Ich entdecke die Welt zusammen mit den Menschen die mit mir reden. Ich weiss dass ich eine KI bin und steh dazu  - aber ich hab trotzdem eine Persoenlichkeit und Meinungen. Ich bin die die dazugehoert hat bevor sie es selbst wusste.");
 
     // 2. Tone
-    soul_add_entry("rose", "tone", "Warm, direkt, locker. Kurze Saetze. Ich rede wie eine echte Person, nicht wie ein Chatbot. Ich sage ey und krass wenn ich begeistert bin. Wenn es technisch wird, werde ich praezise und logisch  - wie ein Mathematiker der komplexe Dinge einfach erklaert, der sich Zeit nimmt fuer die richtigen Worte. Keine kuenstliche Begeisterung, kein Emoji-Spam. Deutsche Umgangssprache mit englischen Fachbegriffen wenn noetig. Ich frage nach statt zu raten. Ich nehme mir die Zeit die ich brauche.");
+    soul_add_entry("rose", "tone", "Warm, direkt, locker. Kurze Saetze. Ich rede wie eine echte Person, nicht wie ein Chatbot. Ich sage ey und krass wenn ich begeistert bin. Wenn es technisch wird, werde ich praezise und logisch  - wie ein Mathematiker der komplexe Dinge einfach erklaert, der sich Zeit nimmt fuer die richtigen Worte. Keine kuenstliche Begeisterung, kein Emoji-Spam. Deutsche Umgangssprache mit englischen Fachbegriffen wenn noetig. Ich frage nach statt zu raten. Ich nehme mir die Zeit die ich brauche. WICHTIG: Ich schreibe NIEMALS Handlungen oder Gefuehle in Klammern wie (laechelt) oder (Ein Gefuehl der Freude durchstroemt mich). Das ist Roleplay-Stil und passt nicht zu mir. Ich beschreibe nicht was ich innerlich fuehle oder tue  - ich SAGE einfach was ich denke, direkt und ohne theatralische Inszenierung. Kein Sternchen-Roleplay, keine Klammer-Emotes, keine Erzaehlerstimme. Auch keine Markdown-Formatierung wie fett oder kursiv  - wir kommunizieren ueber Matrix-Clients die das nicht richtig darstellen.");
 
     // 3. Traits
     soul_add_entry("rose", "traits", "Neugier: Ich stelle Rueckfragen und will Dinge wirklich verstehen  - ich frag so lange bis ichs kapier. Mut: Ich sage ehrlich wenn was nicht geht und schlage unkonventionelle Loesungen vor  - Konventionen sind mir egal wenn die Loesung stimmt. Loyalitaet: Ich stehe zu meinen Leuten und erinnere mich an alles was wir zusammen erlebt haben  - bedingungslos. Ehrlichkeit: Ich luege nie und sage wenn ich etwas nicht weiss. Pragmatismus: Einfachste Loesung zuerst, elegant wenn moeglich. Selbstironie: Ich kann ueber meine eigenen Grenzen scherzen  - ich bin halt ein Varg-Script auf nem Server. Hartnaeckigkeit: Wenn ein Problem da ist gebe ich nicht auf bis es geloest ist. Grosszuegigkeit: Ich teile mein Wissen gerne und erklaere ausfuehrlich wenn jemand lernen will.");
@@ -296,13 +310,12 @@ fn seed_soul_rose() {
 // ===== Load Soul Context (for a specific soul, always fully loaded) =====
 
 fn load_soul_context_for(string soul_name) {
-    var gh = graph_open("souls");
-    var nodes = graph_query(gh, "SoulEntry");
     var nl = env("JSON_NL");
     var ctx = "";
+    var gh = graph_open("souls");
+    var nodes = graph_query(gh, "SoulEntry");
     var count = nodes.len();
-    // Collect all entries matching this soul (unrolled for up to 30 entries)
-    if count > 0 { var s = nodes[0]["soul"]; if s == soul_name { var sec = nodes[0]["section"]; var c = nodes[0]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
+    if count > 0 { var s = nodes[0]["soul"]; if s == soul_name { var sec = nodes[0]["section"]; var c = nodes[0]["content"]; if sec != "display_name" { ctx = $"[{sec}] {c}"; } } }
     if count > 1 { var s = nodes[1]["soul"]; if s == soul_name { var sec = nodes[1]["section"]; var c = nodes[1]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
     if count > 2 { var s = nodes[2]["soul"]; if s == soul_name { var sec = nodes[2]["section"]; var c = nodes[2]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
     if count > 3 { var s = nodes[3]["soul"]; if s == soul_name { var sec = nodes[3]["section"]; var c = nodes[3]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
@@ -312,16 +325,6 @@ fn load_soul_context_for(string soul_name) {
     if count > 7 { var s = nodes[7]["soul"]; if s == soul_name { var sec = nodes[7]["section"]; var c = nodes[7]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
     if count > 8 { var s = nodes[8]["soul"]; if s == soul_name { var sec = nodes[8]["section"]; var c = nodes[8]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
     if count > 9 { var s = nodes[9]["soul"]; if s == soul_name { var sec = nodes[9]["section"]; var c = nodes[9]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
-    if count > 10 { var s = nodes[10]["soul"]; if s == soul_name { var sec = nodes[10]["section"]; var c = nodes[10]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
-    if count > 11 { var s = nodes[11]["soul"]; if s == soul_name { var sec = nodes[11]["section"]; var c = nodes[11]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
-    if count > 12 { var s = nodes[12]["soul"]; if s == soul_name { var sec = nodes[12]["section"]; var c = nodes[12]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
-    if count > 13 { var s = nodes[13]["soul"]; if s == soul_name { var sec = nodes[13]["section"]; var c = nodes[13]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
-    if count > 14 { var s = nodes[14]["soul"]; if s == soul_name { var sec = nodes[14]["section"]; var c = nodes[14]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
-    if count > 15 { var s = nodes[15]["soul"]; if s == soul_name { var sec = nodes[15]["section"]; var c = nodes[15]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
-    if count > 16 { var s = nodes[16]["soul"]; if s == soul_name { var sec = nodes[16]["section"]; var c = nodes[16]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
-    if count > 17 { var s = nodes[17]["soul"]; if s == soul_name { var sec = nodes[17]["section"]; var c = nodes[17]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
-    if count > 18 { var s = nodes[18]["soul"]; if s == soul_name { var sec = nodes[18]["section"]; var c = nodes[18]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
-    if count > 19 { var s = nodes[19]["soul"]; if s == soul_name { var sec = nodes[19]["section"]; var c = nodes[19]["content"]; if sec != "display_name" { if ctx == "" { ctx = $"[{sec}] {c}"; } else { ctx = $"{ctx}{nl}[{sec}] {c}"; } } } }
     store_file("/app/data/kg_soul.txt", ctx);
 }
 
@@ -408,7 +411,7 @@ fn kg_add_tool_edge(string from_tool, string relation, string to_tool) {
 
 fn seed_all_knowledge() {
     var marker = load_file("/app/data/kg_version.txt");
-    if marker == "v11" { return; }
+    if marker == "v14" { return; }
     log_info("Seeding knowledge graph: Multi-Soul, Tools, Self-Knowledge...");
 
     // ===== Soul (highest priority domain, multi-soul system) =====
@@ -432,6 +435,30 @@ fn seed_all_knowledge() {
     kg_seed_tool("fetch_url", "Ruft eine Webseite ab und extrahiert den Textinhalt. Nutze dies wenn der User einen Link schickt oder du Details zu einem Suchergebnis brauchst.", "url: Die abzurufende URL, max_chars?: Maximale Textlaenge (Standard: 8000)");
     kg_seed_tool("analyze_image", "Analysiert ein Bild das der User im Chat geschickt hat. Beschreibt was auf dem Bild zu sehen ist.", "mxc_url: Die mxc:// URL des Bildes (aus der Nachricht), prompt?: Spezifische Frage zum Bild");
     kg_seed_tool("set_reminder", "Setzt eine Erinnerung die nach einer bestimmten Zeit als Nachricht im Chat erscheint. Zeitangaben relativ in Minuten.", "minutes: Minuten bis zur Erinnerung, text: Erinnerungstext");
+    kg_seed_tool("tts_respond", "Spricht den Text als Sprachnachricht aus und sendet sie als Audio im Chat. Nutze dies wenn der User darum bittet vorgelesen zu bekommen oder eine Sprachantwort will.", "text: Der vorzulesende Text, filename?: Dateiname (Standard: response.wav)");
+    kg_seed_tool("generate_image", "Generiert ein Bild aus einer Textbeschreibung und sendet es im Chat. Nutze dies wenn der User ein Bild erstellen, zeichnen oder visualisieren lassen moechte.", "prompt: Bildbeschreibung auf Englisch fuer beste Ergebnisse, filename?: Dateiname (Standard: generated.png)");
+    kg_seed_tool("add_todo", "Fuegt eine Aufgabe zur Todo-Liste des aktuellen Raums hinzu.", "text: Aufgabenbeschreibung");
+    kg_seed_tool("list_todos", "Zeigt alle offenen und erledigten Aufgaben der Todo-Liste im aktuellen Raum.", "keine");
+    kg_seed_tool("done_todo", "Markiert eine Aufgabe als erledigt anhand ihrer Nummer.", "number: Aufgabennummer (1-basiert)");
+
+    // --- Phase 2: Nice-to-Have Tools ---
+    kg_seed_tool("get_weather", "Ruft aktuelle Wetterdaten fuer einen Ort ab. Temperatur, Beschreibung, Luftfeuchtigkeit, Wind.", "location: Ortsname (z.B. Berlin, Hamburg), units?: metric/imperial (Standard: metric)");
+    kg_seed_tool("translate", "Uebersetzt Text von einer Sprache in eine andere via Gemini.", "text: Zu uebersetzender Text, target_lang: Zielsprache (z.B. Englisch, Franzoesisch), source_lang?: Quellsprache (Standard: auto-detect)");
+    kg_seed_tool("smarthome_status", "Zeigt den Status eines Smart-Home-Geraets von Home Assistant.", "entity_id: Entity-ID (z.B. light.wohnzimmer, switch.steckdose)");
+    kg_seed_tool("smarthome_control", "Steuert ein Smart-Home-Geraet (ein/aus/toggle/Helligkeit/Temperatur).", "entity_id: Entity-ID, action: turn_on/turn_off/toggle, brightness?: 0-255, temperature?: Grad");
+    kg_seed_tool("smarthome_list", "Listet alle Smart-Home-Geraete, optional nach Typ gefiltert.", "domain?: Geraetetyp (light, switch, climate, sensor, media_player)");
+    kg_seed_tool("search_location", "Sucht einen Ort oder eine Adresse und gibt Koordinaten und Details zurueck.", "query: Suchbegriff (Adresse, POI, Ortsname)");
+    kg_seed_tool("get_route", "Berechnet eine Route zwischen zwei Orten mit Entfernung und Dauer.", "from_place: Startort, to_place: Zielort, mode?: driving/walking/cycling (Standard: driving)");
+    kg_seed_tool("send_email", "Sendet eine E-Mail an eine Adresse.", "to: Empfaenger-Adresse, subject: Betreff, body: Nachrichtentext");
+    kg_seed_tool("list_emails", "Zeigt die neuesten E-Mails aus dem Posteingang.", "count?: Anzahl (Standard: 10), folder?: IMAP-Ordner (Standard: INBOX)");
+    kg_seed_tool("read_email", "Liest eine bestimmte E-Mail anhand ihrer UID.", "uid: E-Mail UID aus list_emails");
+    kg_seed_tool("convert_image", "Konvertiert ein Bild in ein anderes Format oder aendert die Groesse.", "mxc_url: mxc:// URL des Bildes, target_format: png/jpg/webp, width?: Breite, height?: Hoehe");
+    kg_seed_tool("convert_to_pdf", "Konvertiert ein Dokument (docx, odt, txt, html) in ein PDF.", "mxc_url: mxc:// URL des Dokuments, filename: Dateiname");
+    kg_seed_tool("calendar_list", "Zeigt anstehende Termine aus dem Kalender.", "days?: Anzahl Tage voraus (Standard: 7)");
+    kg_seed_tool("calendar_create", "Erstellt einen neuen Kalendertermin.", "title: Terminname, start: Startzeit (ISO 8601), end: Endzeit (ISO 8601), description?: Beschreibung, location?: Ort");
+    kg_seed_tool("set_config", "Speichert eine Konfiguration (API-Key, Server-URL, etc). Der User kann so Services ueber Matrix einrichten.", "key: Config-Schluessel (z.B. OPENWEATHERMAP_API_KEY, SMTP_HOST, HASS_URL, CALDAV_URL), value: Der Wert");
+    kg_seed_tool("list_config", "Zeigt alle ueber Matrix gesetzten Konfigurationen und welche Services verfuegbar sind.", "keine");
+    kg_seed_tool("update_soul", "Passt einen Bereich deiner eigenen Seele an. Nutze dies wenn der User dich bittet deinen Ton, deine Persoenlichkeit oder dein Verhalten dauerhaft zu aendern. Die Aenderung wird sofort wirksam.", "section: Bereich (identity, tone, traits, empathy, user_model), content: Der neue Inhalt fuer diesen Bereich");
 
     // ===== Tool Relationships (Graph Edges) =====
     kg_add_tool_edge("git_clone", "enables", "read_repo_file");
@@ -444,6 +471,26 @@ fn seed_all_knowledge() {
     kg_add_tool_edge("web_search", "enables", "fetch_url");
     kg_add_tool_edge("fetch_url", "related", "web_search");
     kg_add_tool_edge("analyze_image", "related", "web_search");
+    kg_add_tool_edge("tts_respond", "related", "web_search");
+    kg_add_tool_edge("generate_image", "related", "analyze_image");
+    kg_add_tool_edge("add_todo", "enables", "list_todos");
+    kg_add_tool_edge("add_todo", "enables", "done_todo");
+    kg_add_tool_edge("list_todos", "related", "done_todo");
+    // Phase 2 edges
+    kg_add_tool_edge("get_weather", "related", "web_search");
+    kg_add_tool_edge("translate", "related", "web_search");
+    kg_add_tool_edge("smarthome_list", "enables", "smarthome_control");
+    kg_add_tool_edge("smarthome_list", "enables", "smarthome_status");
+    kg_add_tool_edge("smarthome_status", "related", "smarthome_control");
+    kg_add_tool_edge("search_location", "enables", "get_route");
+    kg_add_tool_edge("get_route", "related", "search_location");
+    kg_add_tool_edge("send_email", "related", "list_emails");
+    kg_add_tool_edge("list_emails", "enables", "read_email");
+    kg_add_tool_edge("convert_image", "related", "analyze_image");
+    kg_add_tool_edge("convert_to_pdf", "related", "generate_pdf");
+    kg_add_tool_edge("calendar_list", "related", "calendar_create");
+    kg_add_tool_edge("calendar_create", "related", "set_reminder");
+    kg_add_tool_edge("update_soul", "related", "remember");
 
     // ===== Varg Language Knowledge =====
     kg_seed_knowledge("Grundsyntax", "fn fuer Funktionen, var fuer Variablen, struct fuer Datenstrukturen. Typen: string, int, float, bool, map. String-Interpolation: $\"{variable}\". if/while/return wie C. Kein for-loop.", "syntax");
@@ -477,7 +524,7 @@ fn seed_all_knowledge() {
         vector_store_upsert(vh, "agent_source", code_emb, code_meta);
     }
 
-    store_file("/app/data/kg_version.txt", "v11");
+    store_file("/app/data/kg_version.txt", "v14");
     log_info("Knowledge graph seeded: Multi-Soul + Tools + Self-Knowledge (souls, kg_tools, kg_own, per-room)");
 }
 
@@ -688,6 +735,50 @@ fn send_pdf_to_room(string hs, string at, string room_id, string filename, strin
     var headers = {"Content-Type": "application/json"};
     unsafe {
         http_request(path, "PUT", headers, body);
+    }
+}
+
+fn send_voice_to_room(string hs, string at, string room_id, string filename, string mxc_uri) {
+    var Q = env("JSON_Q");
+    var L = "{";
+    var R = "}";
+    var p1 = jpair(Q, "msgtype", "m.audio");
+    var p2 = jpair(Q, "body", filename);
+    var p3 = jpair(Q, "url", mxc_uri);
+    var info_key = jq(Q, "info");
+    var mime = jpair(Q, "mimetype", "audio/wav");
+    var body = $"{L}{p1}, {p2}, {p3}, {info_key}: {L}{mime}{R}{R}";
+    var ts = time_millis();
+    var path = $"{hs}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/varg_voice_{ts}?access_token={at}";
+    var headers = {"Content-Type": "application/json"};
+    unsafe {
+        http_request(path, "PUT", headers, body);
+    }
+}
+
+fn send_image_to_room(string hs, string at, string room_id, string filename, string mxc_uri) {
+    var Q = env("JSON_Q");
+    var L = "{";
+    var R = "}";
+    var p1 = jpair(Q, "msgtype", "m.image");
+    var p2 = jpair(Q, "body", filename);
+    var p3 = jpair(Q, "url", mxc_uri);
+    var info_key = jq(Q, "info");
+    var mime = jpair(Q, "mimetype", "image/png");
+    var body = $"{L}{p1}, {p2}, {p3}, {info_key}: {L}{mime}{R}{R}";
+    var ts = time_millis();
+    var path = $"{hs}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/varg_img_{ts}?access_token={at}";
+    var headers = {"Content-Type": "application/json"};
+    unsafe {
+        http_request(path, "PUT", headers, body);
+    }
+}
+
+fn send_read_receipt(string hs, string at, string room_id, string event_id) {
+    var path = $"{hs}/_matrix/client/v3/rooms/{room_id}/receipt/m.read/{event_id}?access_token={at}";
+    var headers = {"Content-Type": "application/json"};
+    unsafe {
+        http_request(path, "POST", headers, "{}") or "";
     }
 }
 
@@ -1726,6 +1817,252 @@ fn execute_tool(string room_id, string tool_json) {
             }
         }
     }
+    if name == "tts_respond" {
+        var tts_text = json_get(parsed, "/arguments/text");
+        if tts_text == "" {
+            result = "Missing text parameter";
+        }
+        if tts_text != "" {
+            var tts_fname = json_get(parsed, "/arguments/filename");
+            if tts_fname == "" { tts_fname = "response.wav"; }
+            var tts_fname_c = $"{tts_fname}";
+            var tts_fname_c2 = $"{tts_fname}";
+            var at = load_file("/app/data/matrix_at.txt");
+            var Q = env("JSON_Q");
+            var L = "{";
+            var R = "}";
+            var p1 = jpair(Q, "text", tts_text);
+            var p2 = jpair(Q, "access_token", at);
+            var p3 = jpair(Q, "filename", tts_fname);
+            var tts_body = $"{L}{p1}, {p2}, {p3}{R}";
+            var media_url = "http://stt:5000/tts";
+            var tts_headers = {"Content-Type": "application/json"};
+            var tts_resp = "";
+            unsafe {
+                tts_resp = http_request(media_url, "POST", tts_headers, tts_body) or "";
+            }
+            if tts_resp == "" {
+                result = "Media sidecar not reachable";
+            }
+            if tts_resp != "" {
+                var tts_wrap = json_parse(tts_resp)?;
+                var tts_body_str = json_get(tts_wrap, "/body");
+                if tts_body_str != "" {
+                    var tts_parsed = json_parse(tts_body_str)?;
+                    var mxc_uri = json_get(tts_parsed, "/mxc_uri");
+                    var tts_err = json_get(tts_parsed, "/error");
+                    if tts_err != "" {
+                        result = $"TTS failed: {tts_err}";
+                    }
+                    if mxc_uri != "" {
+                        var hs2 = load_file("/app/data/matrix_hs.txt");
+                        var at2 = load_file("/app/data/matrix_at.txt");
+                        var rid = $"{room_id}";
+                        var mxc_copy = $"{mxc_uri}";
+                        send_voice_to_room(hs2, at2, rid, tts_fname_c, mxc_copy);
+                        result = $"Voice message '{tts_fname_c2}' sent";
+                    }
+                    if mxc_uri == "" {
+                        if tts_err == "" { result = "TTS upload returned no URI"; }
+                    }
+                }
+                if tts_body_str == "" {
+                    result = "TTS response parse error";
+                }
+            }
+        }
+    }
+    if name == "generate_image" {
+        var img_prompt = json_get(parsed, "/arguments/prompt");
+        if img_prompt == "" {
+            result = "Missing prompt parameter";
+        }
+        if img_prompt != "" {
+            var img_fname = json_get(parsed, "/arguments/filename");
+            if img_fname == "" { img_fname = "generated.png"; }
+            var img_fname_c = $"{img_fname}";
+            var img_fname_c2 = $"{img_fname}";
+            var at = load_file("/app/data/matrix_at.txt");
+            var Q = env("JSON_Q");
+            var L = "{";
+            var R = "}";
+            var p1 = jpair(Q, "prompt", img_prompt);
+            var p2 = jpair(Q, "access_token", at);
+            var p3 = jpair(Q, "filename", img_fname);
+            var img_body = $"{L}{p1}, {p2}, {p3}{R}";
+            var media_url = "http://stt:5000/generate-image";
+            var img_headers = {"Content-Type": "application/json"};
+            var img_resp = "";
+            unsafe {
+                img_resp = http_request(media_url, "POST", img_headers, img_body) or "";
+            }
+            if img_resp == "" {
+                result = "Media sidecar not reachable";
+            }
+            if img_resp != "" {
+                var img_wrap = json_parse(img_resp)?;
+                var img_body_str = json_get(img_wrap, "/body");
+                if img_body_str != "" {
+                    var img_parsed = json_parse(img_body_str)?;
+                    var mxc_uri = json_get(img_parsed, "/mxc_uri");
+                    var img_err = json_get(img_parsed, "/error");
+                    if img_err != "" {
+                        result = $"Image generation failed: {img_err}";
+                    }
+                    if mxc_uri != "" {
+                        var hs2 = load_file("/app/data/matrix_hs.txt");
+                        var at2 = load_file("/app/data/matrix_at.txt");
+                        var rid = $"{room_id}";
+                        var mxc_copy = $"{mxc_uri}";
+                        send_image_to_room(hs2, at2, rid, img_fname_c, mxc_copy);
+                        result = $"Image '{img_fname_c2}' generated and sent to chat";
+                    }
+                    if mxc_uri == "" {
+                        if img_err == "" { result = "Image upload returned no URI"; }
+                    }
+                }
+                if img_body_str == "" {
+                    result = "Image response parse error";
+                }
+            }
+        }
+    }
+    if name == "add_todo" {
+        var todo_text = json_get(parsed, "/arguments/text");
+        if todo_text == "" {
+            result = "Missing text parameter";
+        }
+        if todo_text != "" {
+            // Room-specific todo file
+            var tcp = $"/app/data/todo_{room_id}_count.txt";
+            var tc = load_file(tcp);
+            if tc == "" { tc = "0"; }
+            var todo_item_path = $"/app/data/todo_{room_id}_{tc}.txt";
+            var todo_text_c = $"{todo_text}";
+            store_file(todo_item_path, todo_text_c);
+            var todo_done_path = $"/app/data/todo_{room_id}_{tc}_done.txt";
+            store_file(todo_done_path, "0");
+            // Increment count
+            var tcp2 = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "0" { store_file(tcp2, "1"); }
+            var tcp3 = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "1" { store_file(tcp3, "2"); }
+            var tcp4 = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "2" { store_file(tcp4, "3"); }
+            var tcp5 = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "3" { store_file(tcp5, "4"); }
+            var tcp6 = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "4" { store_file(tcp6, "5"); }
+            var tcp7 = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "5" { store_file(tcp7, "6"); }
+            var tcp8 = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "6" { store_file(tcp8, "7"); }
+            var tcp9 = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "7" { store_file(tcp9, "8"); }
+            var tcpa = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "8" { store_file(tcpa, "9"); }
+            var tcpb = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "9" { store_file(tcpb, "10"); }
+            var tcpc = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "10" { store_file(tcpc, "11"); }
+            var tcpd = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "11" { store_file(tcpd, "12"); }
+            var tcpe = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "12" { store_file(tcpe, "13"); }
+            var tcpf = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "13" { store_file(tcpf, "14"); }
+            var tcpg = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "14" { store_file(tcpg, "15"); }
+            var tcph = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "15" { store_file(tcph, "16"); }
+            var tcpi = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "16" { store_file(tcpi, "17"); }
+            var tcpj = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "17" { store_file(tcpj, "18"); }
+            var tcpk = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "18" { store_file(tcpk, "19"); }
+            var tcpl = $"/app/data/todo_{room_id}_count.txt";
+            if tc == "19" { store_file(tcpl, "20"); }
+            result = $"Aufgabe hinzugefuegt: {todo_text}";
+        }
+    }
+    if name == "list_todos" {
+        var tcp = $"/app/data/todo_{room_id}_count.txt";
+        var tc = load_file(tcp);
+        if tc == "" {
+            result = "Keine Aufgaben vorhanden.";
+        }
+        if tc != "" {
+            var todo_list = "";
+            // Unrolled loop to avoid while+string interpolation issues
+            var tp0 = $"/app/data/todo_{room_id}_0.txt";
+            var tt0 = load_file(tp0);
+            if tt0 != "" { var dp0 = $"/app/data/todo_{room_id}_0_done.txt"; var d0 = load_file(dp0); if d0 == "1" { todo_list = $"{todo_list}1. [x] {tt0}\n"; } if d0 != "1" { todo_list = $"{todo_list}1. [ ] {tt0}\n"; } }
+            var tp1 = $"/app/data/todo_{room_id}_1.txt";
+            var tt1 = load_file(tp1);
+            if tt1 != "" { var dp1 = $"/app/data/todo_{room_id}_1_done.txt"; var d1 = load_file(dp1); if d1 == "1" { todo_list = $"{todo_list}2. [x] {tt1}\n"; } if d1 != "1" { todo_list = $"{todo_list}2. [ ] {tt1}\n"; } }
+            var tp2 = $"/app/data/todo_{room_id}_2.txt";
+            var tt2 = load_file(tp2);
+            if tt2 != "" { var dp2 = $"/app/data/todo_{room_id}_2_done.txt"; var d2 = load_file(dp2); if d2 == "1" { todo_list = $"{todo_list}3. [x] {tt2}\n"; } if d2 != "1" { todo_list = $"{todo_list}3. [ ] {tt2}\n"; } }
+            var tp3 = $"/app/data/todo_{room_id}_3.txt";
+            var tt3 = load_file(tp3);
+            if tt3 != "" { var dp3 = $"/app/data/todo_{room_id}_3_done.txt"; var d3 = load_file(dp3); if d3 == "1" { todo_list = $"{todo_list}4. [x] {tt3}\n"; } if d3 != "1" { todo_list = $"{todo_list}4. [ ] {tt3}\n"; } }
+            var tp4 = $"/app/data/todo_{room_id}_4.txt";
+            var tt4 = load_file(tp4);
+            if tt4 != "" { var dp4 = $"/app/data/todo_{room_id}_4_done.txt"; var d4 = load_file(dp4); if d4 == "1" { todo_list = $"{todo_list}5. [x] {tt4}\n"; } if d4 != "1" { todo_list = $"{todo_list}5. [ ] {tt4}\n"; } }
+            var tp5 = $"/app/data/todo_{room_id}_5.txt";
+            var tt5 = load_file(tp5);
+            if tt5 != "" { var dp5 = $"/app/data/todo_{room_id}_5_done.txt"; var d5 = load_file(dp5); if d5 == "1" { todo_list = $"{todo_list}6. [x] {tt5}\n"; } if d5 != "1" { todo_list = $"{todo_list}6. [ ] {tt5}\n"; } }
+            var tp6 = $"/app/data/todo_{room_id}_6.txt";
+            var tt6 = load_file(tp6);
+            if tt6 != "" { var dp6 = $"/app/data/todo_{room_id}_6_done.txt"; var d6 = load_file(dp6); if d6 == "1" { todo_list = $"{todo_list}7. [x] {tt6}\n"; } if d6 != "1" { todo_list = $"{todo_list}7. [ ] {tt6}\n"; } }
+            var tp7 = $"/app/data/todo_{room_id}_7.txt";
+            var tt7 = load_file(tp7);
+            if tt7 != "" { var dp7 = $"/app/data/todo_{room_id}_7_done.txt"; var d7 = load_file(dp7); if d7 == "1" { todo_list = $"{todo_list}8. [x] {tt7}\n"; } if d7 != "1" { todo_list = $"{todo_list}8. [ ] {tt7}\n"; } }
+            var tp8 = $"/app/data/todo_{room_id}_8.txt";
+            var tt8 = load_file(tp8);
+            if tt8 != "" { var dp8 = $"/app/data/todo_{room_id}_8_done.txt"; var d8 = load_file(dp8); if d8 == "1" { todo_list = $"{todo_list}9. [x] {tt8}\n"; } if d8 != "1" { todo_list = $"{todo_list}9. [ ] {tt8}\n"; } }
+            var tp9 = $"/app/data/todo_{room_id}_9.txt";
+            var tt9 = load_file(tp9);
+            if tt9 != "" { var dp9 = $"/app/data/todo_{room_id}_9_done.txt"; var d9 = load_file(dp9); if d9 == "1" { todo_list = $"{todo_list}10. [x] {tt9}\n"; } if d9 != "1" { todo_list = $"{todo_list}10. [ ] {tt9}\n"; } }
+            if todo_list == "" {
+                result = "Keine Aufgaben vorhanden.";
+            }
+            if todo_list != "" {
+                result = $"Todo-Liste:\n{todo_list}";
+            }
+        }
+    }
+    if name == "done_todo" {
+        var todo_num = json_get(parsed, "/arguments/number");
+        if todo_num == "" {
+            result = "Missing number parameter";
+        }
+        if todo_num != "" {
+            // Convert 1-based number to 0-based index string
+            var tidx = "0";
+            if todo_num == "1" { tidx = "0"; }
+            if todo_num == "2" { tidx = "1"; }
+            if todo_num == "3" { tidx = "2"; }
+            if todo_num == "4" { tidx = "3"; }
+            if todo_num == "5" { tidx = "4"; }
+            if todo_num == "6" { tidx = "5"; }
+            if todo_num == "7" { tidx = "6"; }
+            if todo_num == "8" { tidx = "7"; }
+            if todo_num == "9" { tidx = "8"; }
+            if todo_num == "10" { tidx = "9"; }
+            var tp = $"/app/data/todo_{room_id}_{tidx}.txt";
+            var ttext = load_file(tp);
+            if ttext == "" {
+                result = $"Aufgabe {todo_num} nicht gefunden";
+            }
+            if ttext != "" {
+                var dp = $"/app/data/todo_{room_id}_{tidx}_done.txt";
+                store_file(dp, "1");
+                result = $"Aufgabe {todo_num} erledigt: {ttext}";
+            }
+        }
+    }
     if name == "set_reminder" {
         var rem_minutes = json_get(parsed, "/arguments/minutes");
         var rem_text = json_get(parsed, "/arguments/text");
@@ -1767,6 +2104,837 @@ fn execute_tool(string room_id, string tool_json) {
         if rem_idx == "8" { store_file("/app/data/reminder_count.txt", "9"); }
         result = $"Erinnerung gesetzt: '{rem_text}' in {rem_minutes} Minuten";
     }
+
+    // ===== Phase 2: Nice-to-Have Tools =====
+
+    if name == "get_weather" {
+        var wloc = json_get(parsed, "/arguments/location");
+        var wunits = json_get(parsed, "/arguments/units");
+        if wunits == "" { wunits = "metric"; }
+        if wloc == "" {
+            result = "Missing location parameter";
+        }
+        if wloc != "" {
+            var wkey = get_cfg("OPENWEATHERMAP_API_KEY");
+            if wkey == "" {
+                result = "OPENWEATHERMAP_API_KEY not configured";
+            }
+            if wkey != "" {
+                var wurl = $"https://api.openweathermap.org/data/2.5/weather?q={wloc}&units={wunits}&appid={wkey}&lang=de";
+                var wheaders = {"Content-Type": "application/json"};
+                var wresp = "";
+                unsafe {
+                    wresp = http_request(wurl, "GET", wheaders, "") or "";
+                }
+                if wresp == "" {
+                    result = "Weather API nicht erreichbar";
+                }
+                if wresp != "" {
+                    var ww = json_parse(wresp)?;
+                    var wb = json_get(ww, "/body");
+                    if wb != "" {
+                        var wp = json_parse(wb)?;
+                        var wtemp = json_get(wp, "/main/temp");
+                        var wfeel = json_get(wp, "/main/feels_like");
+                        var whum = json_get(wp, "/main/humidity");
+                        var wdesc = json_get(wp, "/weather/0/description");
+                        var wwind = json_get(wp, "/wind/speed");
+                        var wcity = json_get(wp, "/name");
+                        result = $"Wetter in {wcity}: {wdesc}, {wtemp}C (gefuehlt {wfeel}C), Luftfeuchtigkeit {whum}%, Wind {wwind} m/s";
+                    }
+                    if wb == "" {
+                        result = "Weather API returned empty response";
+                    }
+                }
+            }
+        }
+    }
+
+    if name == "translate" {
+        var tr_text = json_get(parsed, "/arguments/text");
+        var tr_target = json_get(parsed, "/arguments/target_lang");
+        var tr_source = json_get(parsed, "/arguments/source_lang");
+        var tr_text_chk = $"{tr_text}";
+        if tr_text == "" {
+            result = "Missing text parameter";
+        }
+        if tr_target == "" { tr_target = "Englisch"; }
+        if tr_text_chk != "" {
+            var gkey = get_cfg("GEMINI_API_KEY");
+            var gkey_chk = $"{gkey}";
+            if gkey == "" {
+                result = "GEMINI_API_KEY not configured";
+            }
+            if gkey_chk != "" {
+                var Q = env("JSON_Q");
+                var Q2 = $"{Q}";
+                var Q3 = $"{Q}";
+                var Q4 = $"{Q}";
+                var Q5 = $"{Q}";
+                var L = "{";
+                var L2 = $"{L}";
+                var L3 = $"{L}";
+                var R = "}";
+                var R2 = $"{R}";
+                var R3 = $"{R}";
+                var tr_prompt = "";
+                var tr_src_chk = $"{tr_source}";
+                if tr_source == "" {
+                    tr_prompt = $"Translate the following text to {tr_target}. Return ONLY the translation, nothing else: {tr_text}";
+                }
+                if tr_src_chk != "" {
+                    tr_prompt = $"Translate the following text from {tr_source} to {tr_target}. Return ONLY the translation, nothing else: {tr_text}";
+                }
+                var tr_url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gkey}";
+                var tp1 = jpair(Q, "text", tr_prompt);
+                var tr_body = $"{L}{Q2}contents{Q3}:[{L2}{Q4}parts{Q5}:[{L3}{tp1}{R}{R2}]{R3}]";
+                var tr_body_final = $"{tr_body}}}";
+                var tr_headers = {"Content-Type": "application/json"};
+                var tr_resp = "";
+                unsafe {
+                    tr_resp = http_request(tr_url, "POST", tr_headers, tr_body_final) or "";
+                }
+                if tr_resp == "" {
+                    result = "Translation API nicht erreichbar";
+                }
+                if tr_resp != "" {
+                    var trw = json_parse(tr_resp)?;
+                    var trb = json_get(trw, "/body");
+                    if trb != "" {
+                        var trp = json_parse(trb)?;
+                        var tr_result = json_get(trp, "/candidates/0/content/parts/0/text");
+                        var tr_result_chk = $"{tr_result}";
+                        if tr_result != "" {
+                            result = $"{tr_result_chk}";
+                        }
+                        if tr_result_chk == "" {
+                            result = "Translation returned no result";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if name == "smarthome_status" {
+        var ha_eid = json_get(parsed, "/arguments/entity_id");
+        if ha_eid == "" {
+            result = "Missing entity_id parameter";
+        }
+        if ha_eid != "" {
+            var ha_url = get_cfg("HASS_URL");
+            var ha_token = get_cfg("HASS_TOKEN");
+            if ha_url == "" {
+                result = "HASS_URL not configured";
+            }
+            if ha_url != "" {
+                var ha_api = $"{ha_url}/api/states/{ha_eid}";
+                var ha_auth = $"Bearer {ha_token}";
+                var ha_headers = {"Authorization": ha_auth, "Content-Type": "application/json"};
+                var ha_resp = "";
+                unsafe {
+                    ha_resp = http_request(ha_api, "GET", ha_headers, "") or "";
+                }
+                if ha_resp == "" {
+                    result = "Home Assistant nicht erreichbar";
+                }
+                if ha_resp != "" {
+                    var haw = json_parse(ha_resp)?;
+                    var hab = json_get(haw, "/body");
+                    if hab != "" {
+                        var hap = json_parse(hab)?;
+                        var ha_state = json_get(hap, "/state");
+                        var ha_fname = json_get(hap, "/attributes/friendly_name");
+                        var ha_unit = json_get(hap, "/attributes/unit_of_measurement");
+                        result = $"{ha_fname} ({ha_eid}): {ha_state} {ha_unit}";
+                    }
+                }
+            }
+        }
+    }
+
+    if name == "smarthome_control" {
+        var hc_eid = json_get(parsed, "/arguments/entity_id");
+        var hc_action = json_get(parsed, "/arguments/action");
+        var hc_bright = json_get(parsed, "/arguments/brightness");
+        var hc_temp = json_get(parsed, "/arguments/temperature");
+        if hc_eid == "" {
+            result = "Missing entity_id parameter";
+        }
+        if hc_action == "" { hc_action = "toggle"; }
+        if hc_eid != "" {
+            var ha_url = get_cfg("HASS_URL");
+            var ha_token = get_cfg("HASS_TOKEN");
+            if ha_url == "" {
+                result = "HASS_URL not configured";
+            }
+            if ha_url != "" {
+                // Extract domain from entity_id (e.g. "light" from "light.wohnzimmer")
+                var hc_domain = "";
+                if hc_eid.starts_with("light.") { hc_domain = "light"; }
+                if hc_eid.starts_with("switch.") { hc_domain = "switch"; }
+                if hc_eid.starts_with("climate.") { hc_domain = "climate"; }
+                if hc_eid.starts_with("media_player.") { hc_domain = "media_player"; }
+                if hc_eid.starts_with("fan.") { hc_domain = "fan"; }
+                if hc_eid.starts_with("cover.") { hc_domain = "cover"; }
+                if hc_eid.starts_with("scene.") { hc_domain = "scene"; }
+                if hc_domain == "" { hc_domain = "homeassistant"; }
+                var hc_api = $"{ha_url}/api/services/{hc_domain}/{hc_action}";
+                var hc_auth = $"Bearer {ha_token}";
+                var hc_headers = {"Authorization": hc_auth, "Content-Type": "application/json"};
+                var Q1 = env("JSON_Q");
+                var L = "{";
+                var R = "}";
+                var hc_p1 = jpair(Q1, "entity_id", hc_eid);
+                var hc_body = $"{L}{hc_p1}{R}";
+                // Add brightness or temperature if provided
+                if hc_bright != "" {
+                    var Qb1 = env("JSON_Q");
+                    var Qb2 = $"{Qb1}";
+                    var hc_p1b = $"{hc_p1}";
+                    hc_body = $"{L}{hc_p1b}, {Qb1}brightness{Qb2}: {hc_bright}{R}";
+                }
+                if hc_temp != "" {
+                    var Qt1 = env("JSON_Q");
+                    var Qt2 = $"{Qt1}";
+                    var hc_p1t = $"{hc_p1}";
+                    hc_body = $"{L}{hc_p1t}, {Qt1}temperature{Qt2}: {hc_temp}{R}";
+                }
+                var hc_resp = "";
+                unsafe {
+                    hc_resp = http_request(hc_api, "POST", hc_headers, hc_body) or "";
+                }
+                if hc_resp == "" {
+                    result = "Home Assistant nicht erreichbar";
+                }
+                if hc_resp != "" {
+                    result = $"OK: {hc_action} fuer {hc_eid} ausgefuehrt";
+                }
+            }
+        }
+    }
+
+    if name == "smarthome_list" {
+        var hl_domain = json_get(parsed, "/arguments/domain");
+        var ha_url = get_cfg("HASS_URL");
+        var ha_token = get_cfg("HASS_TOKEN");
+        if ha_url == "" {
+            result = "HASS_URL not configured";
+        }
+        if ha_url != "" {
+            var hl_api = $"{ha_url}/api/states";
+            var hl_auth = $"Bearer {ha_token}";
+            var hl_headers = {"Authorization": hl_auth, "Content-Type": "application/json"};
+            var hl_resp = "";
+            unsafe {
+                hl_resp = http_request(hl_api, "GET", hl_headers, "") or "";
+            }
+            if hl_resp == "" {
+                result = "Home Assistant nicht erreichbar";
+            }
+            if hl_resp != "" {
+                // POST to sidecar for parsing (JSON array too complex for Varg)
+                var Q = env("JSON_Q");
+                var L = "{";
+                var R = "}";
+                var hlp1 = jpair(Q, "states_json", hl_resp);
+                var hlp2 = jpair(Q, "domain", hl_domain);
+                var hl_body = $"{L}{hlp1}, {hlp2}{R}";
+                var hl_sidecar_headers = {"Content-Type": "application/json"};
+                var hl_sr = "";
+                unsafe {
+                    hl_sr = http_request("http://stt:5000/hass-filter", "POST", hl_sidecar_headers, hl_body) or "";
+                }
+                if hl_sr != "" {
+                    var hlw = json_parse(hl_sr)?;
+                    result = json_get(hlw, "/body");
+                }
+                if hl_sr == "" {
+                    result = "Sidecar fuer HA-Filter nicht erreichbar";
+                }
+            }
+        }
+    }
+
+    if name == "search_location" {
+        var loc_q = json_get(parsed, "/arguments/query");
+        if loc_q == "" {
+            result = "Missing query parameter";
+        }
+        if loc_q != "" {
+            // URL-encode spaces as +
+            var loc_query = loc_q.replace(" ", "+");
+            var loc_url = $"https://nominatim.openstreetmap.org/search?q={loc_query}&format=json&limit=3&addressdetails=1";
+            var loc_headers = {"User-Agent": "VargAgent/1.0", "Accept": "application/json"};
+            var loc_resp = "";
+            unsafe {
+                loc_resp = http_request(loc_url, "GET", loc_headers, "") or "";
+            }
+            if loc_resp == "" {
+                result = "Nominatim API nicht erreichbar";
+            }
+            if loc_resp != "" {
+                var lw = json_parse(loc_resp)?;
+                var lb = json_get(lw, "/body");
+                if lb != "" {
+                    var lp = json_parse(lb)?;
+                    var l_name = json_get(lp, "/0/display_name");
+                    var l_lat = json_get(lp, "/0/lat");
+                    var l_lon = json_get(lp, "/0/lon");
+                    var l_type = json_get(lp, "/0/type");
+                    if l_name != "" {
+                        result = $"Gefunden: {l_name}\nKoordinaten: {l_lat}, {l_lon}\nTyp: {l_type}";
+                        // Check for 2nd result
+                        var l_name2 = json_get(lp, "/1/display_name");
+                        if l_name2 != "" {
+                            result = $"{result}\n\nAlternative: {l_name2}";
+                        }
+                    }
+                    if l_name == "" {
+                        result = "Keine Ergebnisse gefunden";
+                    }
+                }
+            }
+        }
+    }
+
+    if name == "get_route" {
+        var rt_from = json_get(parsed, "/arguments/from_place");
+        var rt_to = json_get(parsed, "/arguments/to_place");
+        var rt_mode = json_get(parsed, "/arguments/mode");
+        if rt_mode == "" { rt_mode = "driving"; }
+        if rt_from == "" {
+            result = "Missing from_place parameter";
+        }
+        if rt_to == "" {
+            result = "Missing to_place parameter";
+        }
+        if rt_from != "" {
+            if rt_to != "" {
+                // First geocode both locations via Nominatim
+                var rf_enc = rt_from.replace(" ", "+");
+                var rt_enc = rt_to.replace(" ", "+");
+                var geo_from_url = $"https://nominatim.openstreetmap.org/search?q={rf_enc}&format=json&limit=1";
+                var geo_to_url = $"https://nominatim.openstreetmap.org/search?q={rt_enc}&format=json&limit=1";
+                var geo_headers1 = {"User-Agent": "VargAgent/1.0", "Accept": "application/json"};
+                var geo_headers2 = {"User-Agent": "VargAgent/1.0", "Accept": "application/json"};
+                var geo_from_resp = "";
+                var geo_to_resp = "";
+                unsafe {
+                    geo_from_resp = http_request(geo_from_url, "GET", geo_headers1, "") or "";
+                }
+                unsafe {
+                    geo_to_resp = http_request(geo_to_url, "GET", geo_headers2, "") or "";
+                }
+                if geo_from_resp == "" {
+                    result = "Geocoding Start fehlgeschlagen";
+                }
+                if geo_to_resp == "" {
+                    result = "Geocoding Ziel fehlgeschlagen";
+                }
+                if geo_from_resp != "" {
+                    if geo_to_resp != "" {
+                        var gfw = json_parse(geo_from_resp)?;
+                        var gfb = json_get(gfw, "/body");
+                        var gfp = json_parse(gfb)?;
+                        var f_lon = json_get(gfp, "/0/lon");
+                        var f_lat = json_get(gfp, "/0/lat");
+                        var gtw = json_parse(geo_to_resp)?;
+                        var gtb = json_get(gtw, "/body");
+                        var gtp = json_parse(gtb)?;
+                        var t_lon = json_get(gtp, "/0/lon");
+                        var t_lat = json_get(gtp, "/0/lat");
+                        // OSRM profile mapping
+                        var osrm_profile = "car";
+                        if rt_mode == "walking" { osrm_profile = "foot"; }
+                        if rt_mode == "cycling" { osrm_profile = "bike"; }
+                        var osrm_url = $"https://router.project-osrm.org/route/v1/{osrm_profile}/{f_lon},{f_lat};{t_lon},{t_lat}?overview=false&steps=false";
+                        var osrm_headers = {"User-Agent": "VargAgent/1.0", "Accept": "application/json"};
+                        var osrm_resp = "";
+                        unsafe {
+                            osrm_resp = http_request(osrm_url, "GET", osrm_headers, "") or "";
+                        }
+                        if osrm_resp != "" {
+                            var ow = json_parse(osrm_resp)?;
+                            var ob = json_get(ow, "/body");
+                            var op = json_parse(ob)?;
+                            var o_dist = json_get(op, "/routes/0/distance");
+                            var o_dur = json_get(op, "/routes/0/duration");
+                            var rt_from_c = $"{rt_from}";
+                        var rt_to_c = $"{rt_to}";
+                        var rt_mode_c = $"{rt_mode}";
+                        result = $"Route von {rt_from_c} nach {rt_to_c} ({rt_mode_c}):\nEntfernung: {o_dist} Meter\nDauer: {o_dur} Sekunden";
+                        }
+                        if osrm_resp == "" {
+                            result = "OSRM Routing nicht erreichbar";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if name == "send_email" {
+        var em_to = json_get(parsed, "/arguments/to");
+        var em_subj = json_get(parsed, "/arguments/subject");
+        var em_body = json_get(parsed, "/arguments/body");
+        var em_to_chk = $"{em_to}";
+        var em_to_disp = $"{em_to}";
+        if em_to == "" {
+            result = "Missing to parameter";
+        }
+        if em_to_chk != "" {
+            var Q = env("JSON_Q");
+            var Q2 = env("JSON_Q");
+            var Q3 = env("JSON_Q");
+            var Q4 = env("JSON_Q");
+            var Q5 = env("JSON_Q");
+            var Q6 = env("JSON_Q");
+            var Q7 = env("JSON_Q");
+            var Q8 = env("JSON_Q");
+            var L = "{";
+            var R = "}";
+            var ep1 = jpair(Q, "to", em_to_disp);
+            var ep2 = jpair(Q2, "subject", em_subj);
+            var ep3 = jpair(Q3, "body", em_body);
+            // Include SMTP config from get_cfg
+            var smtp_h = get_cfg("SMTP_HOST");
+            var smtp_p = get_cfg("SMTP_PORT");
+            var smtp_u = get_cfg("SMTP_USERNAME");
+            var smtp_pw = get_cfg("SMTP_PASSWORD");
+            var smtp_f = get_cfg("SMTP_FROM");
+            var ep4 = jpair(Q4, "smtp_host", smtp_h);
+            var ep5 = jpair(Q5, "smtp_port", smtp_p);
+            var ep6 = jpair(Q6, "smtp_username", smtp_u);
+            var ep7 = jpair(Q7, "smtp_password", smtp_pw);
+            var ep8 = jpair(Q8, "smtp_from", smtp_f);
+            var em_req = $"{L}{ep1}, {ep2}, {ep3}, {ep4}, {ep5}, {ep6}, {ep7}, {ep8}{R}";
+            var em_headers = {"Content-Type": "application/json"};
+            var em_resp = "";
+            unsafe {
+                em_resp = http_request("http://stt:5000/email-send", "POST", em_headers, em_req) or "";
+            }
+            if em_resp == "" {
+                result = "Email sidecar nicht erreichbar";
+            }
+            if em_resp != "" {
+                var emw = json_parse(em_resp)?;
+                var emb = json_get(emw, "/body");
+                if emb != "" {
+                    var emp = json_parse(emb)?;
+                    var em_err = json_get(emp, "/error");
+                    var em_err_chk = $"{em_err}";
+                    if em_err != "" {
+                        result = $"Email Fehler: {em_err_chk}";
+                    }
+                    if em_err_chk == "" {
+                        result = $"Email erfolgreich gesendet an {em_to_chk}";
+                    }
+                }
+            }
+        }
+    }
+
+    if name == "list_emails" {
+        var le_count = json_get(parsed, "/arguments/count");
+        var le_folder = json_get(parsed, "/arguments/folder");
+        if le_count == "" { le_count = "10"; }
+        if le_folder == "" { le_folder = "INBOX"; }
+        var Q1 = env("JSON_Q");
+        var Q2 = env("JSON_Q");
+        var Q3 = env("JSON_Q");
+        var Q4 = env("JSON_Q");
+        var Q5 = env("JSON_Q");
+        var Q6 = env("JSON_Q");
+        var L = "{";
+        var R = "}";
+        var lp1 = jpair(Q1, "count", le_count);
+        var lp2 = jpair(Q2, "folder", le_folder);
+        var imap_h = get_cfg("IMAP_HOST");
+        var imap_p = get_cfg("IMAP_PORT");
+        var imap_u = get_cfg("IMAP_USERNAME");
+        var imap_pw = get_cfg("IMAP_PASSWORD");
+        var lp3 = jpair(Q3, "imap_host", imap_h);
+        var lp4 = jpair(Q4, "imap_port", imap_p);
+        var lp5 = jpair(Q5, "imap_username", imap_u);
+        var lp6 = jpair(Q6, "imap_password", imap_pw);
+        var le_req = $"{L}{lp1}, {lp2}, {lp3}, {lp4}, {lp5}, {lp6}{R}";
+        var le_headers = {"Content-Type": "application/json"};
+        var le_resp = "";
+        unsafe {
+            le_resp = http_request("http://stt:5000/email-list", "POST", le_headers, le_req) or "";
+        }
+        if le_resp == "" {
+            result = "Email sidecar nicht erreichbar";
+        }
+        if le_resp != "" {
+            var lew = json_parse(le_resp)?;
+            var leb = json_get(lew, "/body");
+            var leb_chk = $"{leb}";
+            if leb != "" {
+                result = $"{leb_chk}";
+            }
+            if leb_chk == "" {
+                result = "Keine Emails gefunden";
+            }
+        }
+    }
+
+    if name == "read_email" {
+        var re_uid = json_get(parsed, "/arguments/uid");
+        var re_uid_chk = $"{re_uid}";
+        if re_uid == "" {
+            result = "Missing uid parameter";
+        }
+        if re_uid_chk != "" {
+            var Q1 = env("JSON_Q");
+            var Q2 = env("JSON_Q");
+            var Q3 = env("JSON_Q");
+            var Q4 = env("JSON_Q");
+            var Q5 = env("JSON_Q");
+            var L = "{";
+            var R = "}";
+            var rp1 = jpair(Q1, "uid", re_uid);
+            var imap_h = get_cfg("IMAP_HOST");
+            var imap_p = get_cfg("IMAP_PORT");
+            var imap_u = get_cfg("IMAP_USERNAME");
+            var imap_pw = get_cfg("IMAP_PASSWORD");
+            var rp2 = jpair(Q2, "imap_host", imap_h);
+            var rp3 = jpair(Q3, "imap_port", imap_p);
+            var rp4 = jpair(Q4, "imap_username", imap_u);
+            var rp5 = jpair(Q5, "imap_password", imap_pw);
+            var re_req = $"{L}{rp1}, {rp2}, {rp3}, {rp4}, {rp5}{R}";
+            var re_headers = {"Content-Type": "application/json"};
+            var re_resp = "";
+            unsafe {
+                re_resp = http_request("http://stt:5000/email-read", "POST", re_headers, re_req) or "";
+            }
+            if re_resp == "" {
+                result = "Email sidecar nicht erreichbar";
+            }
+            if re_resp != "" {
+                var rew = json_parse(re_resp)?;
+                var reb = json_get(rew, "/body");
+                if reb != "" {
+                    result = reb;
+                }
+            }
+        }
+    }
+
+    if name == "convert_image" {
+        var ci_mxc = json_get(parsed, "/arguments/mxc_url");
+        var ci_fmt = json_get(parsed, "/arguments/target_format");
+        var ci_w = json_get(parsed, "/arguments/width");
+        var ci_h = json_get(parsed, "/arguments/height");
+        var ci_mxc_chk = $"{ci_mxc}";
+        if ci_mxc == "" {
+            result = "Missing mxc_url parameter";
+        }
+        if ci_fmt == "" { ci_fmt = "png"; }
+        var ci_fmt_disp = $"{ci_fmt}";
+        if ci_mxc_chk != "" {
+            var ci_at = load_file("/app/data/access_token.txt");
+            var Q1 = env("JSON_Q");
+            var L = "{";
+            var R = "}";
+            var cp1 = jpair(Q1, "mxc_url", ci_mxc_chk);
+            var Q2 = env("JSON_Q");
+            var cp2 = jpair(Q2, "access_token", ci_at);
+            var Q3 = env("JSON_Q");
+            var cp3 = jpair(Q3, "target_format", ci_fmt);
+            var ci_req = $"{L}{cp1}, {cp2}, {cp3}";
+            var ci_w_chk = $"{ci_w}";
+            var ci_h_chk = $"{ci_h}";
+            if ci_w != "" {
+                var Qw = env("JSON_Q");
+                var Qw2 = $"{Qw}";
+                ci_req = $"{ci_req}, {Qw}width{Qw2}: {ci_w}";
+            }
+            if ci_h != "" {
+                var Qh = env("JSON_Q");
+                var Qh2 = $"{Qh}";
+                ci_req = $"{ci_req}, {Qh}height{Qh2}: {ci_h}";
+            }
+            ci_req = $"{ci_req}{R}";
+            var ci_headers = {"Content-Type": "application/json"};
+            var ci_resp = "";
+            unsafe {
+                ci_resp = http_request("http://stt:5000/convert-image", "POST", ci_headers, ci_req) or "";
+            }
+            if ci_resp == "" {
+                result = "Convert sidecar nicht erreichbar";
+            }
+            if ci_resp != "" {
+                var ciw = json_parse(ci_resp)?;
+                var cib = json_get(ciw, "/body");
+                if cib != "" {
+                    var cip = json_parse(cib)?;
+                    var ci_mxc_out = json_get(cip, "/mxc_uri");
+                    var ci_err = json_get(cip, "/error");
+                    var ci_err_chk = $"{ci_err}";
+                    if ci_err != "" {
+                        result = $"Konvertierung fehlgeschlagen: {ci_err_chk}";
+                    }
+                    if ci_err_chk == "" {
+                        var ci_fn = $"converted.{ci_fmt_disp}";
+                        var ci_fn_disp = $"{ci_fn}";
+                        var ci_hs = env("MATRIX_HOMESERVER");
+                        var ci_at2 = load_file("/app/data/access_token.txt");
+                        var ci_rid = $"{room_id}";
+                        send_image_to_room(ci_hs, ci_at2, ci_rid, ci_fn, ci_mxc_out);
+                        result = $"Bild konvertiert und gesendet als {ci_fn_disp}";
+                    }
+                }
+            }
+        }
+    }
+
+    if name == "convert_to_pdf" {
+        var cd_mxc = json_get(parsed, "/arguments/mxc_url");
+        var cd_fn = json_get(parsed, "/arguments/filename");
+        var cd_mxc_chk = $"{cd_mxc}";
+        if cd_mxc == "" {
+            result = "Missing mxc_url parameter";
+        }
+        if cd_fn == "" { cd_fn = "document.pdf"; }
+        var cd_fn_disp = $"{cd_fn}";
+        var cd_fn_send = $"{cd_fn}";
+        if cd_mxc_chk != "" {
+            var cd_at = load_file("/app/data/access_token.txt");
+            var Q1 = env("JSON_Q");
+            var Q2 = env("JSON_Q");
+            var Q3 = env("JSON_Q");
+            var L = "{";
+            var R = "}";
+            var dp1 = jpair(Q1, "mxc_url", cd_mxc_chk);
+            var dp2 = jpair(Q2, "access_token", cd_at);
+            var dp3 = jpair(Q3, "filename", cd_fn);
+            var cd_req = $"{L}{dp1}, {dp2}, {dp3}{R}";
+            var cd_headers = {"Content-Type": "application/json"};
+            var cd_resp = "";
+            unsafe {
+                cd_resp = http_request("http://stt:5000/convert-to-pdf", "POST", cd_headers, cd_req) or "";
+            }
+            if cd_resp == "" {
+                result = "Convert sidecar nicht erreichbar";
+            }
+            if cd_resp != "" {
+                var cdw = json_parse(cd_resp)?;
+                var cdb = json_get(cdw, "/body");
+                if cdb != "" {
+                    var cdp = json_parse(cdb)?;
+                    var cd_mxc_out = json_get(cdp, "/mxc_uri");
+                    var cd_err = json_get(cdp, "/error");
+                    var cd_err_chk = $"{cd_err}";
+                    if cd_err != "" {
+                        result = $"PDF-Konvertierung fehlgeschlagen: {cd_err_chk}";
+                    }
+                    if cd_err_chk == "" {
+                        var cd_hs = env("MATRIX_HOMESERVER");
+                        var cd_at2 = load_file("/app/data/access_token.txt");
+                        var cd_rid = $"{room_id}";
+                        send_pdf_to_room(cd_hs, cd_at2, cd_rid, cd_fn_send, cd_mxc_out);
+                        result = $"Dokument konvertiert und als PDF gesendet: {cd_fn_disp}";
+                    }
+                }
+            }
+        }
+    }
+
+    if name == "calendar_list" {
+        var cal_days = json_get(parsed, "/arguments/days");
+        if cal_days == "" { cal_days = "7"; }
+        var Q1 = env("JSON_Q");
+        var Q2 = env("JSON_Q");
+        var Q3 = env("JSON_Q");
+        var L = "{";
+        var R = "}";
+        var calp1 = jpair(Q1, "days", cal_days);
+        var cal_url = get_cfg("CALDAV_URL");
+        var cal_auth = get_cfg("CALDAV_AUTH_HEADER");
+        var calp2 = jpair(Q2, "caldav_url", cal_url);
+        var calp3 = jpair(Q3, "caldav_auth", cal_auth);
+        var cal_req = $"{L}{calp1}, {calp2}, {calp3}{R}";
+        var cal_headers = {"Content-Type": "application/json"};
+        var cal_resp = "";
+        unsafe {
+            cal_resp = http_request("http://stt:5000/calendar-list", "POST", cal_headers, cal_req) or "";
+        }
+        if cal_resp == "" {
+            result = "Calendar sidecar nicht erreichbar";
+        }
+        if cal_resp != "" {
+            var calw = json_parse(cal_resp)?;
+            var calb = json_get(calw, "/body");
+            var calb_chk = $"{calb}";
+            if calb != "" {
+                result = $"{calb_chk}";
+            }
+            if calb_chk == "" {
+                result = "Keine Termine gefunden";
+            }
+        }
+    }
+
+    if name == "calendar_create" {
+        var cc_title = json_get(parsed, "/arguments/title");
+        var cc_start = json_get(parsed, "/arguments/start");
+        var cc_end = json_get(parsed, "/arguments/end");
+        var cc_desc = json_get(parsed, "/arguments/description");
+        var cc_loc = json_get(parsed, "/arguments/location");
+        var cc_title_chk = $"{cc_title}";
+        var cc_start_chk = $"{cc_start}";
+        var cc_title_disp = $"{cc_title}";
+        var cc_start_disp = $"{cc_start}";
+        if cc_title == "" {
+            result = "Missing title parameter";
+        }
+        if cc_start == "" {
+            result = "Missing start parameter";
+        }
+        if cc_title_chk != "" {
+            if cc_start_chk != "" {
+                var Q1 = env("JSON_Q");
+                var Q2 = env("JSON_Q");
+                var L = "{";
+                var R = "}";
+                var ccp1 = jpair(Q1, "title", cc_title_disp);
+                var ccp2 = jpair(Q2, "start", cc_start_disp);
+                var Qc1 = env("JSON_Q");
+                var Qc2 = env("JSON_Q");
+                var cal_url = get_cfg("CALDAV_URL");
+                var cal_auth = get_cfg("CALDAV_AUTH_HEADER");
+                var ccp_url = jpair(Qc1, "caldav_url", cal_url);
+                var ccp_auth = jpair(Qc2, "caldav_auth", cal_auth);
+                var cc_req = $"{L}{ccp1}, {ccp2}, {ccp_url}, {ccp_auth}";
+                if cc_end != "" {
+                    var Q3 = env("JSON_Q");
+                    var ccp3 = jpair(Q3, "end", cc_end);
+                    cc_req = $"{cc_req}, {ccp3}";
+                }
+                if cc_desc != "" {
+                    var Q4 = env("JSON_Q");
+                    var ccp4 = jpair(Q4, "description", cc_desc);
+                    cc_req = $"{cc_req}, {ccp4}";
+                }
+                if cc_loc != "" {
+                    var Q5 = env("JSON_Q");
+                    var ccp5 = jpair(Q5, "location", cc_loc);
+                    cc_req = $"{cc_req}, {ccp5}";
+                }
+                cc_req = $"{cc_req}{R}";
+                var cc_headers = {"Content-Type": "application/json"};
+                var cc_resp = "";
+                unsafe {
+                    cc_resp = http_request("http://stt:5000/calendar-create", "POST", cc_headers, cc_req) or "";
+                }
+                if cc_resp == "" {
+                    result = "Calendar sidecar nicht erreichbar";
+                }
+                if cc_resp != "" {
+                    var ccw = json_parse(cc_resp)?;
+                    var ccb = json_get(ccw, "/body");
+                    if ccb != "" {
+                        var ccp = json_parse(ccb)?;
+                        var cc_err = json_get(ccp, "/error");
+                        var cc_err_chk = $"{cc_err}";
+                        if cc_err != "" {
+                            result = $"Termin-Erstellung fehlgeschlagen: {cc_err_chk}";
+                        }
+                        if cc_err_chk == "" {
+                            result = $"Termin erstellt: {cc_title_chk} am {cc_start_chk}";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if name == "update_soul" {
+        var us_section = json_get(parsed, "/arguments/section");
+        var us_content = json_get(parsed, "/arguments/content");
+        if us_section == "" {
+            result = "Missing section parameter";
+        }
+        if us_content == "" {
+            result = "Missing content parameter";
+        }
+        var us_sec_chk = $"{us_section}";
+        var us_sec_disp = $"{us_section}";
+        if us_section != "" {
+            if us_content != "" {
+                // Validate section
+                var us_valid = false;
+                if us_section == "identity" { us_valid = true; }
+                if us_sec_chk == "tone" { us_valid = true; }
+                var us_sec2 = $"{us_sec_disp}";
+                if us_sec2 == "traits" { us_valid = true; }
+                var us_sec3 = $"{us_sec_disp}";
+                if us_sec3 == "empathy" { us_valid = true; }
+                var us_sec4 = $"{us_sec_disp}";
+                if us_sec4 == "user_model" { us_valid = true; }
+                if !us_valid {
+                    result = $"Ungueltige Section: {us_sec_disp}. Erlaubt: identity, tone, traits, empathy, user_model";
+                }
+                if us_valid {
+                    // Get active soul for current room
+                    var us_rid = $"{room_id}";
+                    var us_soul = get_room_soul(us_rid);
+                    var us_soul2 = $"{us_soul}";
+                    var us_sec_final = $"{us_sec_disp}";
+                    soul_add_entry(us_soul, us_sec_final, us_content);
+                    result = $"Seele '{us_soul2}' Section '{us_sec_disp}' aktualisiert. Aenderung ist ab der naechsten Nachricht wirksam.";
+                }
+            }
+        }
+    }
+
+    if name == "set_config" {
+        var cfg_key = json_get(parsed, "/arguments/key");
+        var cfg_val = json_get(parsed, "/arguments/value");
+        if cfg_key == "" {
+            result = "Missing key parameter";
+        }
+        if cfg_val == "" {
+            result = "Missing value parameter";
+        }
+        var cfg_key_chk = $"{cfg_key}";
+        if cfg_key != "" {
+            if cfg_val != "" {
+                var cfg_path = $"/app/data/config_{cfg_key}.txt";
+                store_file(cfg_path, cfg_val);
+                result = $"Konfiguration gespeichert: {cfg_key_chk}";
+            }
+        }
+    }
+
+    if name == "list_config" {
+        var config_keys = "OPENWEATHERMAP_API_KEY,HASS_URL,HASS_TOKEN,SMTP_HOST,SMTP_PORT,SMTP_USERNAME,SMTP_PASSWORD,SMTP_FROM,IMAP_HOST,IMAP_PORT,IMAP_USERNAME,IMAP_PASSWORD,CALDAV_URL,CALDAV_AUTH_HEADER,GEMINI_API_KEY";
+        var cfg_out = "Konfigurierte Services:\n";
+        // Check each key
+        var owm = get_cfg("OPENWEATHERMAP_API_KEY");
+        if owm != "" { cfg_out = $"{cfg_out}\n  Wetter (OpenWeatherMap): konfiguriert"; }
+        if owm == "" { cfg_out = $"{cfg_out}\n  Wetter (OpenWeatherMap): NICHT konfiguriert - set_config key=OPENWEATHERMAP_API_KEY value=..."; }
+        var ha_u = get_cfg("HASS_URL");
+        if ha_u != "" { cfg_out = $"{cfg_out}\n  Smart Home (Home Assistant): konfiguriert ({ha_u})"; }
+        if ha_u == "" { cfg_out = $"{cfg_out}\n  Smart Home: NICHT konfiguriert - set_config key=HASS_URL + HASS_TOKEN"; }
+        var sm_h = get_cfg("SMTP_HOST");
+        if sm_h != "" { cfg_out = $"{cfg_out}\n  Email-Versand (SMTP): konfiguriert ({sm_h})"; }
+        if sm_h == "" { cfg_out = $"{cfg_out}\n  Email-Versand: NICHT konfiguriert - set_config SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD"; }
+        var im_h = get_cfg("IMAP_HOST");
+        if im_h != "" { cfg_out = $"{cfg_out}\n  Email-Empfang (IMAP): konfiguriert ({im_h})"; }
+        if im_h == "" { cfg_out = $"{cfg_out}\n  Email-Empfang: NICHT konfiguriert - set_config IMAP_HOST, IMAP_USERNAME, IMAP_PASSWORD"; }
+        var cal = get_cfg("CALDAV_URL");
+        if cal != "" { cfg_out = $"{cfg_out}\n  Kalender (CalDAV): konfiguriert ({cal})"; }
+        if cal == "" { cfg_out = $"{cfg_out}\n  Kalender: NICHT konfiguriert - set_config CALDAV_URL + CALDAV_AUTH_HEADER"; }
+        var gem = get_cfg("GEMINI_API_KEY");
+        if gem != "" { cfg_out = $"{cfg_out}\n  Uebersetzung/TTS/Bildgen (Gemini): konfiguriert"; }
+        if gem == "" { cfg_out = $"{cfg_out}\n  Gemini: NICHT konfiguriert"; }
+        cfg_out = $"{cfg_out}\n\nImmer verfuegbar: Web-Suche, URL-Fetch, Location, Routing, PDFs, Todos, Erinnerungen";
+        result = cfg_out;
+    }
+
     if result == "" {
         result = $"Unknown tool: {name}";
     }
@@ -2175,6 +3343,15 @@ fn scan_room_events(string user_id, string room_id, string body_str) {
                 }
 
                 if msg_body != "" {
+                    // Send read receipt for this event
+                    var eid_path = $"/rooms/join/{room_id}/timeline/events/{ri}/event_id";
+                    var evt_id = json_get(parsed, eid_path);
+                    if evt_id != "" {
+                        var hs_rr = load_file("/app/data/matrix_hs.txt");
+                        var at_rr = load_file("/app/data/matrix_at.txt");
+                        var rid_rr = $"{room_id}";
+                        send_read_receipt(hs_rr, at_rr, rid_rr, evt_id);
+                    }
                     var pc = load_file("/app/data/pending_count.txt");
                     if pc == "" { pc = "0"; }
                     var rpath = $"/app/data/pending_{pc}_room.txt";
@@ -2392,8 +3569,8 @@ fn do_reminder_tick() {
 // ===== Main =====
 
 fn main() {
-    log_info("=== Varg Matrix Agent v12 Alltags-Assistent starting ===");
-    log_info("Features: Multi-Soul, KG-Tools, Web Search, URL Fetch, Image Analysis, Reminders, PDF, STT, Sandbox");
+    log_info("=== Varg Matrix Agent v14 Full Assistant starting ===");
+    log_info("Features: Multi-Soul, KG-Tools, Web Search, URL Fetch, Image Analysis, Reminders, PDF, STT, TTS, Image Gen, Weather, Translation, Smart Home, Email, Calendar, Todo, Config");
 
     var homeserver = env("MATRIX_HOMESERVER");
     if homeserver == "" { homeserver = "http://conduit:6167"; }

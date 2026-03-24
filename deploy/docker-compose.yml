@@ -46,6 +46,10 @@ services:
       AGENT_SYSTEM_PROMPT: "${AGENT_SYSTEM_PROMPT:-}"
       MATRIX_ROOM_ID: "${MATRIX_ROOM_ID:-}"
       SANDBOX_URL: "http://sandbox:5001"
+      # Nice-to-have: Weather, Smart Home
+      OPENWEATHERMAP_API_KEY: "${OPENWEATHERMAP_API_KEY:-}"
+      HASS_URL: "${HASS_URL:-}"
+      HASS_TOKEN: "${HASS_TOKEN:-}"
       JSON_Q: '"'
       JSON_NL: "\n"
       JSON_CR: "\r"
@@ -69,6 +73,19 @@ services:
     environment:
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
       MATRIX_HOMESERVER: "http://conduit:6167"
+      # Email
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USERNAME: "${SMTP_USERNAME:-}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: "${SMTP_FROM:-}"
+      IMAP_HOST: "${IMAP_HOST:-}"
+      IMAP_PORT: "${IMAP_PORT:-993}"
+      IMAP_USERNAME: "${IMAP_USERNAME:-}"
+      IMAP_PASSWORD: "${IMAP_PASSWORD:-}"
+      # Calendar (CalDAV)
+      CALDAV_URL: "${CALDAV_URL:-}"
+      CALDAV_AUTH_HEADER: "${CALDAV_AUTH_HEADER:-}"
     depends_on:
       - conduit
     networks:
