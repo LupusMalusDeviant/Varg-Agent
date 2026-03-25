@@ -114,7 +114,7 @@ async fn do_transcribe(mxc_url: &str, access_token: &str) -> Result<String, Stri
 
     let gemini_key = env::var("GEMINI_API_KEY").map_err(|_| "GEMINI_API_KEY not set")?;
     let gemini_url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={}",
         gemini_key
     );
 
@@ -719,7 +719,7 @@ async fn do_analyze_image(
     // Send to Gemini Vision
     let gemini_key = env::var("GEMINI_API_KEY").map_err(|_| "GEMINI_API_KEY not set")?;
     let gemini_url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={}",
         gemini_key
     );
 
@@ -805,7 +805,7 @@ async fn do_tts(text: &str, access_token: &str, filename: &str) -> Result<String
     // Use Gemini TTS API
     let gemini_key = env::var("GEMINI_API_KEY").map_err(|_| "GEMINI_API_KEY not set")?;
     let gemini_url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key={}",
         gemini_key
     );
 
@@ -817,7 +817,7 @@ async fn do_tts(text: &str, access_token: &str, filename: &str) -> Result<String
             "speech_config": {
                 "voiceConfig": {
                     "prebuiltVoiceConfig": {
-                        "voiceName": "Aoede"
+                        "voiceName": "Kore"
                     }
                 }
             }
@@ -935,7 +935,7 @@ async fn do_generate_image(
 
     // Use Gemini's image generation model
     let gemini_url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp-image-generation:generateContent?key={}",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={}",
         gemini_key
     );
 

@@ -526,8 +526,8 @@ fn seed_all_knowledge() {
     kg_seed_knowledge("Exec und System", "exec(cmd) in unsafe{} fuehrt Shell-Befehle aus. Gibt stdout als String zurueck. Fuer build/compile: exec(\"vargc build ...\"). Fuer ls/cat/etc.", "system");
 
     // ===== Agent Architecture Knowledge =====
-    kg_seed_knowledge("Agent Architektur", "Hauptloop: sync->extract_pending->process_pending(5x). Pro Nachricht: store_in_memory/graph/embedding, build_rag_context mit Tool-Discovery, build_llm_input, call_llm_raw, do_tool_followup(max 2 Runden), send_msg_to.", "architecture");
-    kg_seed_knowledge("LLM Integration", "4 Provider: gemini, openai, anthropic, ollama. call_llm_raw dispatcht. System-Prompt + User-Input. Tool-Calls via XML: <tool_call>{...}</tool_call>. Max 2 Tool-Calls pro Nachricht.", "llm");
+    kg_seed_knowledge("Agent Architektur", "Hauptloop: sync dann extract_pending dann process_pending(5x). Pro Nachricht: speichern in memory und graph, RAG-Kontext bauen mit Tool-Discovery, LLM aufrufen, Tool-Followup(max 2 Runden), Antwort senden.", "architecture");
+    kg_seed_knowledge("LLM Integration", "4 Provider: gemini, openai, anthropic, ollama. Dispatch nach Provider. System-Prompt plus User-Input. Tool-Aufrufe via XML-Tags. Max 2 Tool-Aufrufe pro Nachricht.", "llm");
     kg_seed_knowledge("Matrix Integration", "Login via m.login.password. Sync mit next_batch und timeout. Messages via PUT m.room.message. Upload via /_matrix/media/v3/upload. Typing indicators. Room discovery ueber joined_rooms.", "matrix");
     kg_seed_knowledge("Wissensgraph-Architektur", "Multi-Soul-System mit fuenf Domains nach Prioritaet: 1. souls (Multi-Soul Graph: pro Seele identity/tone/traits/empathy/user_model, per-Room Binding, eigener Matrix-Account), 2. kg_tools (Tool-Registry, Vektor-Suche), 3. kg_own (Selbstwissen: Varg-Sprache, Architektur, eigener Code, Vektor-Suche), 4. per-Room conv/vec/graph (permanentes Gespraechsgedaechtnis  - nie vergessen). Neue Tools automatisch in kg_tools registriert. Neue Seelen per !soul create.", "knowledge");
 
@@ -907,7 +907,7 @@ fn call_gemini_http(Config cfg, string user_prompt) -> string {
     var tab = cfg.TAB;
     var sp = cfg.sys_prompt;
     var model = cfg.llm_model;
-    if model == "" { model = "gemini-2.0-flash"; }
+    if model == "" { model = "gemini-2.5-flash"; }
     var gk = cfg.gemini_key;
     var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gk}";
     var c_key = jq(Q, "contents");
@@ -1010,14 +1010,25 @@ fn call_ollama_http(Config cfg, string user_prompt) -> string {
     var sys_content = jpair(Q, "content", safe_sp);
     var usr_role = jpair(Q, "role", "user");
     var usr_content = jpair(Q, "content", safe_msg);
-    var stream_pair = jpair_raw(Q, "stream", "false");
-    var body = $"{L}{m_pair}, {msg_key}: [{L}{sys_role}, {sys_content}{R}, {L}{usr_role}, {usr_content}{R}], {stream_pair}{R}";
+    var nostr_pair = jpair_raw(Q, "stream", "false");
+    var body = $"{L}{m_pair}, {msg_key}: [{L}{sys_role}, {sys_content}{R}, {L}{usr_role}, {usr_content}{R}], {nostr_pair}{R}";
     var headers = {"Content-Type": "application/json"};
     var resp = "";
     unsafe {
         resp = http_request(url, "POST", headers, body) or "";
     }
     return resp;
+}
+
+fn is_rate_limited(string resp) -> bool {
+    if resp == "" { return false; }
+    if resp.contains("Resource exhausted") { return true; }
+    if resp.contains("429") {
+        if resp.contains("RESOURCE_EXHAUSTED") { return true; }
+        if resp.contains("Too Many Requests") { return true; }
+        if resp.contains("rate limit") { return true; }
+    }
+    return false;
 }
 
 fn call_llm_raw(Config cfg, string user_prompt) -> string {
@@ -2222,7 +2233,7 @@ fn execute_tool(string room_id, string tool_json) {
                 if tr_src_chk != "" {
                     tr_prompt = $"Translate the following text from {tr_source} to {tr_target}. Return ONLY the translation, nothing else: {tr_text}";
                 }
-                var tr_url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gkey}";
+                var tr_url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gkey}";
                 var tp1 = jpair(Q, "text", tr_prompt);
                 var tr_body = $"{L}{Q2}contents{Q3}:[{L2}{Q4}parts{Q5}:[{L3}{tp1}{R}{R2}]{R3}]";
                 var tr_body_final = $"{tr_body}}}";
