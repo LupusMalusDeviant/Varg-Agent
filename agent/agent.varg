@@ -1211,6 +1211,72 @@ fn search_graph_context(string room_id, string search_text) {
 
 // ===== Knowledge Discovery (Dynamic Tool & Knowledge Retrieval) =====
 
+fn is_capability_question(string msg) -> bool {
+    var m = msg.to_lower();
+    if m.contains("was kannst du") { return true; }
+    if m.contains("was kannst") { return true; }
+    if m.contains("welche tools") { return true; }
+    if m.contains("welche funktionen") { return true; }
+    if m.contains("was sind deine") { return true; }
+    if m.contains("zeig mir deine") { return true; }
+    if m.contains("liste deine") { return true; }
+    if m.contains("all deine") { return true; }
+    if m.contains("alle tools") { return true; }
+    if m.contains("what can you") { return true; }
+    if m.contains("your tools") { return true; }
+    if m.contains("your capabilities") { return true; }
+    return false;
+}
+
+fn load_all_tools() {
+    var gh = graph_open("kg_tools");
+    var nodes = graph_query(gh, "Tool");
+    var nl = env("JSON_NL");
+    var ctx = "";
+    var count = nodes.len();
+    if count > 0 { var n = nodes[0]["name"]; var d = nodes[0]["description"]; ctx = $"{n} - {d}"; }
+    if count > 1 { var n = nodes[1]["name"]; var d = nodes[1]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 2 { var n = nodes[2]["name"]; var d = nodes[2]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 3 { var n = nodes[3]["name"]; var d = nodes[3]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 4 { var n = nodes[4]["name"]; var d = nodes[4]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 5 { var n = nodes[5]["name"]; var d = nodes[5]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 6 { var n = nodes[6]["name"]; var d = nodes[6]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 7 { var n = nodes[7]["name"]; var d = nodes[7]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 8 { var n = nodes[8]["name"]; var d = nodes[8]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 9 { var n = nodes[9]["name"]; var d = nodes[9]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 10 { var n = nodes[10]["name"]; var d = nodes[10]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 11 { var n = nodes[11]["name"]; var d = nodes[11]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 12 { var n = nodes[12]["name"]; var d = nodes[12]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 13 { var n = nodes[13]["name"]; var d = nodes[13]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 14 { var n = nodes[14]["name"]; var d = nodes[14]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 15 { var n = nodes[15]["name"]; var d = nodes[15]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 16 { var n = nodes[16]["name"]; var d = nodes[16]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 17 { var n = nodes[17]["name"]; var d = nodes[17]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 18 { var n = nodes[18]["name"]; var d = nodes[18]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 19 { var n = nodes[19]["name"]; var d = nodes[19]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 20 { var n = nodes[20]["name"]; var d = nodes[20]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 21 { var n = nodes[21]["name"]; var d = nodes[21]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 22 { var n = nodes[22]["name"]; var d = nodes[22]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 23 { var n = nodes[23]["name"]; var d = nodes[23]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 24 { var n = nodes[24]["name"]; var d = nodes[24]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 25 { var n = nodes[25]["name"]; var d = nodes[25]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 26 { var n = nodes[26]["name"]; var d = nodes[26]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 27 { var n = nodes[27]["name"]; var d = nodes[27]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 28 { var n = nodes[28]["name"]; var d = nodes[28]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 29 { var n = nodes[29]["name"]; var d = nodes[29]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 30 { var n = nodes[30]["name"]; var d = nodes[30]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 31 { var n = nodes[31]["name"]; var d = nodes[31]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 32 { var n = nodes[32]["name"]; var d = nodes[32]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 33 { var n = nodes[33]["name"]; var d = nodes[33]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 34 { var n = nodes[34]["name"]; var d = nodes[34]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 35 { var n = nodes[35]["name"]; var d = nodes[35]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 36 { var n = nodes[36]["name"]; var d = nodes[36]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 37 { var n = nodes[37]["name"]; var d = nodes[37]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 38 { var n = nodes[38]["name"]; var d = nodes[38]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    if count > 39 { var n = nodes[39]["name"]; var d = nodes[39]["description"]; ctx = $"{ctx}{nl}{n} - {d}"; }
+    store_file("/app/data/kg_tools.txt", ctx);
+}
+
 fn discover_tools(string user_msg) {
     var vh = vector_store_open("kg_tools");
     var emb = embed(user_msg);
@@ -1315,8 +1381,15 @@ fn build_rag_context(string room_id, string user_msg) -> string {
     // 1. Soul (always fully loaded - highest priority, per-room binding)
     var rid_soul = $"{room_id}";
     load_soul_context(rid_soul);
-    // 2. Tool discovery (vector search by relevance)
-    discover_tools(msg3);
+    // 2. Tool discovery (all tools for capability questions, top-8 otherwise)
+    var msg_cap = $"{user_msg}";
+    var is_cap = is_capability_question(msg_cap);
+    if is_cap {
+        load_all_tools();
+    }
+    if !is_cap {
+        discover_tools(msg3);
+    }
     // 3. Self-knowledge discovery (Varg language + architecture)
     discover_own_knowledge(msg4);
     // 4. Room-specific RAG (episodic memory + vector similarity)
