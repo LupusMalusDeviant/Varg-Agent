@@ -1109,10 +1109,22 @@ fn extract_llm_reply(Config cfg, string raw_resp) {
     }
     if reply == "" {
         var err = json_get(parsed, "/error/message");
+        var err_check = $"{err}";
         if err != "" {
-            reply = $"LLM Error: {err}";
+            if is_rate_limited(err_check) {
+                reply = "Moment, ich bin gerade etwas ueberlastet. Versuch es bitte gleich nochmal!";
+                log_info($"[RATE_LIMIT] LLM rate limited: {err}");
+            } else {
+                reply = $"LLM Error: {err}";
+            }
         } else {
-            reply = "Error: could not parse LLM response";
+            // Check raw body for rate limit indicators
+            if is_rate_limited(body_str) {
+                reply = "Moment, ich bin gerade etwas ueberlastet. Versuch es bitte gleich nochmal!";
+                log_info("[RATE_LIMIT] LLM rate limited (detected in body)");
+            } else {
+                reply = "Error: could not parse LLM response";
+            }
         }
     }
     store_file("/app/data/llm_reply.txt", reply);
@@ -1431,6 +1443,87 @@ fn extract_text_before_tool(string text) -> string {
     return text;
 }
 
+// Native PDF generation (no LLM call) + upload via sidecar
+// Void function so json_parse()? works (Varg bug #3: Ok(()) only valid in void fns)
+fn do_generate_pdf(string room_id, string raw_json) {
+    var pj = json_parse(raw_json)?;
+    var pdf_title = json_get(pj, "/arguments/title");
+    if pdf_title == "" { pdf_title = "Dokument"; }
+    var pdf_fname = json_get(pj, "/arguments/filename");
+    if pdf_fname == "" { pdf_fname = "document.pdf"; }
+    var fname_c = $"{pdf_fname}";
+    var doc = pdf_create(pdf_title);
+    var sections_raw = json_get(pj, "/arguments/sections");
+    if sections_raw != "" {
+        var sec_arr = json_parse(sections_raw)?;
+        var sec_idx = 0;
+        var sec_done = false;
+        while !sec_done {
+            var sec_path = $"/{sec_idx}/body";
+            var sec_body = json_get(sec_arr, sec_path);
+            if sec_body == "" { sec_done = true; }
+            if sec_body != "" {
+                var head_path = $"/{sec_idx}/heading";
+                var sec_heading = json_get(sec_arr, head_path);
+                if sec_heading != "" { pdf_add_section(doc, sec_heading, sec_body); }
+                if sec_heading == "" { pdf_add_text(doc, sec_body); }
+                sec_idx = sec_idx + 1;
+            }
+        }
+    }
+    if sections_raw == "" {
+        var body_text = json_get(pj, "/arguments/body");
+        if body_text == "" { body_text = "Kein Inhalt angegeben."; }
+        pdf_add_text(doc, body_text);
+    }
+    var b64 = pdf_to_base64(doc);
+    if b64 == "" {
+        store_file("/app/data/pdf_result.txt", "PDF generation failed");
+        return;
+    }
+    var at = load_file("/app/data/matrix_at.txt");
+    var Q = env("JSON_Q");
+    var L = "{";
+    var R = "}";
+    var p1 = jpair(Q, "data_base64", b64);
+    var p2 = jpair(Q, "filename", pdf_fname);
+    var p3 = jpair(Q, "access_token", at);
+    var p4 = jpair(Q, "content_type", "application/pdf");
+    var upload_body = $"{L}{p1}, {p2}, {p3}, {p4}{R}";
+    var upload_headers = {"Content-Type": "application/json"};
+    var upload_resp = "";
+    unsafe {
+        upload_resp = http_request("http://stt:5000/upload-base64", "POST", upload_headers, upload_body) or "";
+    }
+    if upload_resp == "" {
+        store_file("/app/data/pdf_result.txt", "Upload sidecar not reachable");
+        return;
+    }
+    var uw = json_parse(upload_resp)?;
+    var ub = json_get(uw, "/body");
+    if ub == "" {
+        store_file("/app/data/pdf_result.txt", "Upload response parse error");
+        return;
+    }
+    var up = json_parse(ub)?;
+    var up_err = json_get(up, "/error");
+    if up_err != "" {
+        store_file("/app/data/pdf_result.txt", $"PDF upload failed: {up_err}");
+        return;
+    }
+    var mxc_uri = json_get(up, "/mxc_uri");
+    if mxc_uri == "" {
+        store_file("/app/data/pdf_result.txt", "PDF upload returned no URI");
+        return;
+    }
+    var hs2 = load_file("/app/data/matrix_hs.txt");
+    var at2 = load_file("/app/data/matrix_at.txt");
+    var rid = $"{room_id}";
+    var mxc_copy = $"{mxc_uri}";
+    send_pdf_to_room(hs2, at2, rid, fname_c, mxc_copy);
+    store_file("/app/data/pdf_result.txt", $"PDF '{pdf_fname}' erstellt und im Chat gesendet");
+}
+
 fn execute_tool(string room_id, string tool_json) {
     var parsed = json_parse(tool_json)?;
     var name = json_get(parsed, "/name");
@@ -1683,71 +1776,12 @@ fn execute_tool(string room_id, string tool_json) {
         result = $"Custom Varg tools: {ls_result}";
     }
     if name == "generate_pdf" {
-        var pdf_title = json_get(parsed, "/arguments/title");
-        if pdf_title == "" { pdf_title = "Dokument"; }
-        var pdf_fname = json_get(parsed, "/arguments/filename");
-        if pdf_fname == "" { pdf_fname = "document.pdf"; }
-        var pdf_fname_c = $"{pdf_fname}";
-        var pdf_fname_c2 = $"{pdf_fname}";
-        // Build sections JSON from arguments
-        var sections_raw = json_get(parsed, "/arguments/sections");
-        var at = load_file("/app/data/matrix_at.txt");
-        var Q = env("JSON_Q");
-        var L = "{";
-        var R = "}";
-        var p1 = jpair(Q, "title", pdf_title);
-        var p2 = jpair(Q, "filename", pdf_fname);
-        var p3 = jpair(Q, "access_token", at);
-        // sections is already a JSON array string from the LLM
-        var skey = jq(Q, "sections");
-        var pdf_body = "";
-        if sections_raw != "" {
-            pdf_body = $"{L}{p1}, {p3}, {skey}: {sections_raw}{R}";
-        }
-        if sections_raw == "" {
-            // Fallback: single section from body text
-            var body_text = json_get(parsed, "/arguments/body");
-            if body_text == "" { body_text = "Kein Inhalt angegeben."; }
-            var sec_heading = jpair(Q, "heading", "");
-            var sec_body = jpair(Q, "body", body_text);
-            pdf_body = $"{L}{p1}, {p3}, {skey}: [{L}{sec_heading}, {sec_body}{R}]{R}";
-        }
-        var media_url = "http://stt:5000/generate-pdf";
-        var pdf_headers = {"Content-Type": "application/json"};
-        var pdf_resp = "";
-        unsafe {
-            pdf_resp = http_request(media_url, "POST", pdf_headers, pdf_body) or "";
-        }
-        if pdf_resp == "" {
-            result = "Media sidecar not reachable";
-        }
-        if pdf_resp != "" {
-            var pdf_wrap = json_parse(pdf_resp)?;
-            var pdf_body_str = json_get(pdf_wrap, "/body");
-            if pdf_body_str != "" {
-                var pdf_parsed = json_parse(pdf_body_str)?;
-                var mxc_uri = json_get(pdf_parsed, "/mxc_uri");
-                var pdf_err = json_get(pdf_parsed, "/error");
-                if pdf_err != "" {
-                    result = $"PDF generation failed: {pdf_err}";
-                }
-                if mxc_uri != "" {
-                    // Send PDF to room
-                    var hs2 = load_file("/app/data/matrix_hs.txt");
-                    var at2 = load_file("/app/data/matrix_at.txt");
-                    var rid = $"{room_id}";
-                    var mxc_copy = $"{mxc_uri}";
-                    send_pdf_to_room(hs2, at2, rid, pdf_fname_c, mxc_copy);
-                    result = $"PDF '{pdf_fname_c2}' generated and sent to chat";
-                }
-                if mxc_uri == "" {
-                    if pdf_err == "" { result = "PDF upload returned no URI"; }
-                }
-            }
-            if pdf_body_str == "" {
-                result = "PDF response parse error";
-            }
-        }
+        store_file("/app/data/pdf_result.txt", "");
+        var rid_copy = $"{room_id}";
+        var tj_copy = $"{tool_json}";
+        do_generate_pdf(rid_copy, tj_copy);
+        result = load_file("/app/data/pdf_result.txt");
+        if result == "" { result = "PDF generation completed"; }
     }
     if name == "web_search" {
         var search_query = json_get(parsed, "/arguments/query");

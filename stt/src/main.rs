@@ -1726,6 +1726,70 @@ async fn calendar_create(Json(req): Json<CalendarCreateReq>) -> Json<serde_json:
 }
 
 // ============================================================
+// Upload Base64 data to Matrix (for native PDF generation in agent)
+// ============================================================
+
+#[derive(Deserialize)]
+struct UploadBase64Req {
+    data_base64: String,
+    filename: String,
+    content_type: Option<String>,
+    access_token: String,
+    homeserver: Option<String>,
+}
+
+async fn upload_base64(Json(req): Json<UploadBase64Req>) -> Json<serde_json::Value> {
+    use base64::Engine;
+    let hs = req.homeserver.as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| env::var("MATRIX_HOMESERVER").unwrap_or_else(|_| "http://conduit:6167".into()));
+
+    let content_type = req.content_type.as_deref().unwrap_or("application/octet-stream");
+
+    let file_bytes = match base64::engine::general_purpose::STANDARD.decode(&req.data_base64) {
+        Ok(b) => b,
+        Err(e) => return Json(serde_json::json!({"error": format!("Base64 decode failed: {e}")})),
+    };
+
+    let upload_url = format!(
+        "{}/_matrix/media/v3/upload?access_token={}&filename={}",
+        hs, req.access_token, req.filename
+    );
+
+    let client = reqwest::Client::new();
+    let resp = match client
+        .post(&upload_url)
+        .header("Content-Type", content_type)
+        .body(file_bytes)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return Json(serde_json::json!({"error": format!("Upload failed: {e}")})),
+    };
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Json(serde_json::json!({"error": format!("Upload HTTP {}: {}", status, body)}));
+    }
+
+    let upload_resp: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return Json(serde_json::json!({"error": format!("Upload parse failed: {e}")})),
+    };
+
+    let mxc_uri = upload_resp["content_uri"].as_str().unwrap_or("").to_string();
+    if mxc_uri.is_empty() {
+        return Json(serde_json::json!({"error": "No content_uri in upload response"}));
+    }
+
+    Json(serde_json::json!({"mxc_uri": mxc_uri}))
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -1747,13 +1811,14 @@ async fn main() {
         .route("/convert-to-pdf", post(convert_to_pdf))
         .route("/hass-filter", post(hass_filter))
         .route("/calendar-list", post(calendar_list))
-        .route("/calendar-create", post(calendar_create));
+        .route("/calendar-create", post(calendar_create))
+        .route("/upload-base64", post(upload_base64));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:5000")
         .await
         .expect("Failed to bind port 5000");
 
     println!("[MEDIA] Rust media sidecar v0.3 listening on :5000");
-    println!("[MEDIA] Endpoints: /transcribe, /generate-pdf, /web-search, /fetch-url, /analyze-image, /tts, /generate-image, /email-send, /email-list, /email-read, /convert-image, /convert-to-pdf, /hass-filter, /calendar-list, /calendar-create");
+    println!("[MEDIA] Endpoints: /transcribe, /generate-pdf, /web-search, /fetch-url, /analyze-image, /tts, /generate-image, /email-send, /email-list, /email-read, /convert-image, /convert-to-pdf, /hass-filter, /calendar-list, /calendar-create, /upload-base64");
     axum::serve(listener, app).await.expect("Server failed");
 }
