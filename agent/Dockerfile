@@ -8,6 +8,8 @@ FROM rust:latest AS vargc-builder
 
 WORKDIR /build
 
+# Cache-bust: bump to force fresh clone (v0.9.0+fix4 = self-bug fix)
+ARG VARG_VERSION=v0.9.0-fix4
 RUN apt-get update && apt-get install -y git pkg-config libssl-dev && \
     git clone --depth 1 https://github.com/LupusMalusDeviant/VARG.git
 

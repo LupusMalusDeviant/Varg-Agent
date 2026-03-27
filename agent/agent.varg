@@ -1,5 +1,5 @@
 // =============================================================================
-// Varg Matrix Chat Agent - v14 "Full Assistant" (Varg v0.9.0 — SQLite-persistent graphs)
+// Varg Matrix Chat Agent - v16 "Full Assistant" (Varg v0.9.0+fix4 — native PDF, self-bug fixed)
 // Features: Multi-Soul System, Knowledge-Graph Tools, Self-Extending, Multi-Room,
 //           Graph-RAG, STT, Sandbox, Git Clone, Permanent Memory,
 //           Web Search, URL Fetch, Image Analysis (Gemini Vision), Reminders, PDF Gen,
@@ -415,7 +415,7 @@ fn kg_add_tool_edge(string from_tool, string relation, string to_tool) {
 }
 
 fn seed_all_knowledge() {
-    var current_version = "v15";
+    var current_version = "v16";
     var stored_version = load_file("/app/data/kg_version.txt");
     if stored_version == current_version {
         log_info($"Knowledge graph already seeded ({current_version}), skipping");
@@ -1225,6 +1225,14 @@ fn is_capability_question(string msg) -> bool {
     if m.contains("what can you") { return true; }
     if m.contains("your tools") { return true; }
     if m.contains("your capabilities") { return true; }
+    // Explicit tool name mentions -> load all so LLM can use the named tool
+    if m.contains("rufe") { if m.contains("tool") { return true; } }
+    if m.contains("nutze") { if m.contains("tool") { return true; } }
+    if m.contains("benutze") { if m.contains("tool") { return true; } }
+    if m.contains("use the") { if m.contains("tool") { return true; } }
+    if m.contains("call the") { if m.contains("tool") { return true; } }
+    if m.contains("generate_pdf") { return true; }
+    if m.contains("run the") { return true; }
     return false;
 }
 
