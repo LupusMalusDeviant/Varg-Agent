@@ -120,6 +120,22 @@ fn load_room_history(string room_id) -> string {
 
 fn save_room_history(string room_id, string h) {
     var path = room_file(room_id, "history");
+    // Trim history to last ~6000 chars to avoid token overflow
+    var hlen = h.len();
+    if hlen > 6000 {
+        var start = hlen - 6000;
+        var trimmed = h.substring(start, 6000);
+        // Find first "User:" to avoid cutting mid-message
+        if trimmed.contains("User:") {
+            var idx = trimmed.index_of("User:");
+            if idx > 0 {
+                var rest_len = 6000 - idx;
+                trimmed = trimmed.substring(idx, rest_len);
+            }
+        }
+        store_file(path, trimmed);
+        return;
+    }
     store_file(path, h);
 }
 
@@ -1031,7 +1047,7 @@ fn is_rate_limited(string resp) -> bool {
     return false;
 }
 
-fn call_llm_raw(Config cfg, string user_prompt) -> string {
+fn call_llm_once(Config cfg, string user_prompt) -> string {
     var provider = $"{cfg.llm_provider}";
     if provider == "gemini" {
         return call_gemini_http(cfg, user_prompt);
@@ -1046,6 +1062,36 @@ fn call_llm_raw(Config cfg, string user_prompt) -> string {
         return call_ollama_http(cfg, user_prompt);
     }
     return "";
+}
+
+fn call_llm_raw(Config cfg, string user_prompt) -> string {
+    // Attempt 1
+    var prompt1 = $"{user_prompt}";
+    var resp = call_llm_once(cfg, user_prompt);
+    if resp != "" {
+        var check1 = $"{resp}";
+        if !is_rate_limited(check1) {
+            return resp;
+        }
+        log_info("[RATE_LIMIT] Attempt 1 rate-limited, retrying in 3s...");
+    }
+    // Wait 3 seconds before retry
+    sleep(3000);
+    // Attempt 2
+    var prompt2 = $"{prompt1}";
+    var resp2 = call_llm_once(cfg, prompt1);
+    if resp2 != "" {
+        var check2 = $"{resp2}";
+        if !is_rate_limited(check2) {
+            return resp2;
+        }
+        log_info("[RATE_LIMIT] Attempt 2 rate-limited, retrying in 5s...");
+    }
+    // Wait 5 seconds before final retry
+    sleep(5000);
+    // Attempt 3 (final)
+    var resp3 = call_llm_once(cfg, prompt2);
+    return resp3;
 }
 
 // ===== Response Extraction (void - uses ?) =====
@@ -3783,7 +3829,7 @@ fn main() {
     if ollama_url == "" { ollama_url = "http://127.0.0.1:11434"; }
     var sys_prompt = env("AGENT_SYSTEM_PROMPT");
     if sys_prompt == "" {
-        sys_prompt = "Du bist die Seele die unter [Soul] beschrieben wird. Lebe diese Identitaet  - sie ist DEINE. Tools unter [Verfuegbare Tools]. Wissen unter [Relevantes Wissen]. Erinnerungen unter [Relevante Erinnerungen]. Die Soul hat hoechste Prioritaet.";
+        sys_prompt = "Du bist die Seele die unter [Soul] beschrieben wird. Lebe diese Identitaet - sie ist DEINE. Antworte IMMER in deiner Soul-Persoenlichkeit. Wenn du ein Tool nutzen willst, antworte mit <tool_call>{name, arguments}</tool_call>. Die verfuegbaren Tools stehen unter [Verfuegbare Tools] im Kontext. Nutze Tools aktiv wenn sie zum Thema passen. Wissen unter [Relevantes Wissen]. Erinnerungen unter [Relevante Erinnerungen]. Die Soul hat hoechste Prioritaet. Behaupte NIE du koenntest etwas nicht, wenn ein passendes Tool vorhanden ist.";
     }
     var Q = env("JSON_Q");
     var NL = env("JSON_NL");
