@@ -1066,32 +1066,25 @@ fn call_llm_once(Config cfg, string user_prompt) -> string {
 
 fn call_llm_raw(Config cfg, string user_prompt) -> string {
     // Attempt 1
-    var prompt1 = $"{user_prompt}";
     var resp = call_llm_once(cfg, user_prompt);
     if resp != "" {
-        var check1 = $"{resp}";
-        if !is_rate_limited(check1) {
+        if !is_rate_limited(resp) {
             return resp;
         }
-        log_info("[RATE_LIMIT] Attempt 1 rate-limited, retrying in 3s...");
+        log_info("[RATE_LIMIT] Attempt 1 rate-limited, short pause then retry...");
+        sleep(500);
     }
-    // Wait 3 seconds before retry
-    sleep(3000);
     // Attempt 2
-    var prompt2 = $"{prompt1}";
-    var resp2 = call_llm_once(cfg, prompt1);
+    var resp2 = call_llm_once(cfg, user_prompt);
     if resp2 != "" {
-        var check2 = $"{resp2}";
-        if !is_rate_limited(check2) {
+        if !is_rate_limited(resp2) {
             return resp2;
         }
-        log_info("[RATE_LIMIT] Attempt 2 rate-limited, retrying in 5s...");
+        log_info("[RATE_LIMIT] Attempt 2 rate-limited, returning as-is");
     }
-    // Wait 5 seconds before final retry
-    sleep(5000);
-    // Attempt 3 (final)
-    var resp3 = call_llm_once(cfg, prompt2);
-    return resp3;
+    // Return whatever we got (even if rate-limited, let caller handle)
+    if resp2 != "" { return resp2; }
+    return resp;
 }
 
 // ===== Response Extraction (void - uses ?) =====
@@ -1573,33 +1566,69 @@ fn extract_text_before_tool(string text) -> string {
 // Native PDF generation (no LLM call) + upload via sidecar
 // Void function so json_parse()? works (Varg bug #3: Ok(()) only valid in void fns)
 fn do_generate_pdf(string room_id, string raw_json) {
+    log_info($"[PDF] raw_json: {raw_json}");
     var pj = json_parse(raw_json)?;
     var pdf_title = json_get(pj, "/arguments/title");
+    if pdf_title == "" { pdf_title = json_get(pj, "/title"); }
     if pdf_title == "" { pdf_title = "Dokument"; }
     var pdf_fname = json_get(pj, "/arguments/filename");
+    if pdf_fname == "" { pdf_fname = json_get(pj, "/filename"); }
     if pdf_fname == "" { pdf_fname = "document.pdf"; }
     var fname_c = $"{pdf_fname}";
     var doc = pdf_create(pdf_title);
-    var sections_raw = json_get(pj, "/arguments/sections");
-    if sections_raw != "" {
-        var sec_arr = json_parse(sections_raw)?;
-        var sec_idx = 0;
-        var sec_done = false;
-        while !sec_done {
-            var sec_path = $"/{sec_idx}/body";
-            var sec_body = json_get(sec_arr, sec_path);
-            if sec_body == "" { sec_done = true; }
-            if sec_body != "" {
-                var head_path = $"/{sec_idx}/heading";
-                var sec_heading = json_get(sec_arr, head_path);
-                if sec_heading != "" { pdf_add_section(doc, sec_heading, sec_body); }
-                if sec_heading == "" { pdf_add_text(doc, sec_body); }
-                sec_idx = sec_idx + 1;
+    // Iterate sections directly via JSON pointer into the parsed tool JSON
+    // json_get cannot extract arrays as strings, so we access elements by index
+    var sec_idx = 0;
+    var sec_done = false;
+    var has_sections = false;
+    while !sec_done {
+        // Try /arguments/sections/N/body first
+        var sec_path = $"/arguments/sections/{sec_idx}/body";
+        var sec_body = json_get(pj, sec_path);
+        if sec_body == "" {
+            sec_path = $"/arguments/sections/{sec_idx}/content";
+            sec_body = json_get(pj, sec_path);
+        }
+        if sec_body == "" {
+            sec_path = $"/arguments/sections/{sec_idx}/text";
+            sec_body = json_get(pj, sec_path);
+        }
+        // Also try without /arguments/ wrapper
+        if sec_body == "" {
+            sec_path = $"/sections/{sec_idx}/body";
+            sec_body = json_get(pj, sec_path);
+        }
+        if sec_body == "" {
+            sec_path = $"/sections/{sec_idx}/content";
+            sec_body = json_get(pj, sec_path);
+        }
+        log_info($"[PDF] sec[{sec_idx}] body: '{sec_body}'");
+        if sec_body == "" { sec_done = true; }
+        if sec_body != "" {
+            has_sections = true;
+            var head_path = $"/arguments/sections/{sec_idx}/heading";
+            var sec_heading = json_get(pj, head_path);
+            if sec_heading == "" {
+                head_path = $"/arguments/sections/{sec_idx}/title";
+                sec_heading = json_get(pj, head_path);
             }
+            if sec_heading == "" {
+                head_path = $"/sections/{sec_idx}/heading";
+                sec_heading = json_get(pj, head_path);
+            }
+            if sec_heading != "" { pdf_add_section(doc, sec_heading, sec_body); }
+            if sec_heading == "" { pdf_add_text(doc, sec_body); }
+            sec_idx = sec_idx + 1;
         }
     }
-    if sections_raw == "" {
+    if !has_sections {
+        // Fallback: try body/content/text as flat arguments
         var body_text = json_get(pj, "/arguments/body");
+        if body_text == "" { body_text = json_get(pj, "/arguments/content"); }
+        if body_text == "" { body_text = json_get(pj, "/arguments/text"); }
+        if body_text == "" { body_text = json_get(pj, "/body"); }
+        if body_text == "" { body_text = json_get(pj, "/content"); }
+        if body_text == "" { body_text = json_get(pj, "/text"); }
         if body_text == "" { body_text = "Kein Inhalt angegeben."; }
         pdf_add_text(doc, body_text);
     }
